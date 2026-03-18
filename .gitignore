@@ -1,0 +1,105 @@
+# ============================================================
+# BeatWrap! Monorepo .gitignore
+# Covers: Expo/React Native (beatwrap/) + Node.js (beatwrap-backend/)
+# ============================================================
+
+# ---------------------------
+# Dependencies
+# ---------------------------
+node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# ---------------------------
+# Environment & Secrets
+# NEVER commit real secrets
+# ---------------------------
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+.env.test
+!.env.example
+!**/.env.example
+
+# ---------------------------
+# Expo / React Native
+# ---------------------------
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native build artifacts
+android/
+ios/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Metro bundler
+.metro-health-check*
+
+# ---------------------------
+# Node.js Backend
+# ---------------------------
+beatwrap-backend/dist/
+beatwrap-backend/build/
+beatwrap-backend/logs/
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+pids/
+*.pid
+*.seed
+
+# ---------------------------
+# TypeScript
+# ---------------------------
+*.tsbuildinfo
+*.d.ts.map
+
+# ---------------------------
+# Testing & Coverage
+# ---------------------------
+coverage/
+.nyc_output/
+jest-results/
+
+# ---------------------------
+# Editor & OS
+# ---------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+
+# ---------------------------
+# Misc
+# ---------------------------
+*.pem
+*.tgz
+.cache/
+tmp/
+temp/
+
+.env
+.env.local
+.env.*
