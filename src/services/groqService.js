@@ -1,7 +1,7 @@
 import axios from 'axios';
-import Constants from 'expo-constants';
+import { getRuntimeConfig } from '../utils/runtimeConfig';
 
-const GROQ_API_KEY = Constants.expoConfig?.extra?.GROQ_API_KEY || '';
+const { GROQ_API_KEY } = getRuntimeConfig();
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
 
 // ─────────────────────────────────────────────────────────────────────────────

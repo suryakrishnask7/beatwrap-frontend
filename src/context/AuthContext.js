@@ -2,17 +2,16 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import * as SecureStore from 'expo-secure-store';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
-import Constants from 'expo-constants';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setAuthToken, wakeBackend } from '../services/apiService';
+import { getRuntimeConfig } from '../utils/runtimeConfig';
 
 WebBrowser.maybeCompleteAuthSession();
 
 const AuthContext = createContext(null);
 
-const SPOTIFY_CLIENT_ID = Constants.expoConfig?.extra?.SPOTIFY_CLIENT_ID || '';
-const BACKEND_URL = Constants.expoConfig?.extra?.BACKEND_URL || 'https://beatwrap-backend.onrender.com';
+const { SPOTIFY_CLIENT_ID, BACKEND_URL } = getRuntimeConfig();
 const IS_PRODUCTION = !__DEV__;
 const REDIRECT_URI = IS_PRODUCTION
   ? 'com.beatwrap.app://redirect'
@@ -20,6 +19,7 @@ const REDIRECT_URI = IS_PRODUCTION
 
 console.log('REDIRECT_URI:', REDIRECT_URI);
 console.log('BACKEND_URL:', BACKEND_URL);
+console.log('SPOTIFY_CLIENT_ID present:', Boolean(SPOTIFY_CLIENT_ID));
 
 const discovery = {
   authorizationEndpoint: 'https://accounts.spotify.com/authorize',

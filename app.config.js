@@ -48,9 +48,9 @@ module.exports = {
     scheme: "beatwrap",
     plugins: ["expo-secure-store"],
     extra: {
-      SPOTIFY_CLIENT_ID: process.env.SPOTIFY_CLIENT_ID,
-      BACKEND_URL: process.env.BACKEND_URL,
-      GROQ_API_KEY: process.env.GROQ_API_KEY,
+      SPOTIFY_CLIENT_ID: process.env.EXPO_PUBLIC_SPOTIFY_CLIENT_ID,
+      BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
+      GROQ_API_KEY: process.env.EXPO_PUBLIC_GROQ_API_KEY,
       eas: {
         projectId: "41e11ca8-ecb6-48dd-8965-df244cb423d5",
       },

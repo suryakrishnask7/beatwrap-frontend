@@ -1,7 +1,7 @@
 import axios from 'axios';
-import Constants from 'expo-constants';
+import { getRuntimeConfig } from '../utils/runtimeConfig';
 
-const BACKEND_URL = Constants.expoConfig?.extra?.BACKEND_URL || 'https://beatwrap-backend.onrender.com';
+const { BACKEND_URL } = getRuntimeConfig();
 
 const api = axios.create({ baseURL: BACKEND_URL });
 

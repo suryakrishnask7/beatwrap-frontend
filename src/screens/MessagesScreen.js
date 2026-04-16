@@ -9,9 +9,9 @@ import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/apiService';
 import { COLORS, FONTS, SPACING } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
+import { getRuntimeConfig } from '../utils/runtimeConfig';
 
-const BACKEND_URL = Constants.expoConfig?.extra?.BACKEND_URL || 'https://beatwrap-backend.onrender.com';
+const { BACKEND_URL } = getRuntimeConfig();
 const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
 
 function formatTime(ts) {
