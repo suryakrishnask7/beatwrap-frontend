@@ -20,22 +20,19 @@ function AppContent() {
     );
   }
 
-  // Not logged in
   if (!user) return <LoginScreen />;
 
-  // Logged in but no username yet — show onboarding
   if (!user.hasUsername) return <UsernameScreen />;
 
-  // Fully set up — show app
   return <AppNavigator />;
 }
 
 export default function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaProvider style={styles.root}>
         <AuthProvider>
-          <StatusBar style="light" />
+          <StatusBar style="light" backgroundColor={COLORS.bg} translucent={false} />
           <AppContent />
         </AuthProvider>
       </SafeAreaProvider>
@@ -44,5 +41,14 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1, backgroundColor: COLORS.bg, alignItems: 'center', justifyContent: 'center' },
+  root: {
+    flex: 1,
+    backgroundColor: COLORS.bg, // #0A0A0F — kills the white flash
+  },
+  loading: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

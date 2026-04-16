@@ -17,7 +17,7 @@ export const COLORS = {
   greenSoft: '#10B98122',
   text: '#F0F0FF',
   textMuted: '#9090B0',
-  textDim: '#5050708',
+  textDim: '#505070', // FIXED: was '#5050708' (7 chars, invalid hex)
   border: '#2A2A40',
   borderGlow: '#FF336633',
   white: '#FFFFFF',

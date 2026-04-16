@@ -11,40 +11,93 @@ import { RadialProgress, CompareBar } from '../components/Charts';
 import { COLORS, FONTS, SPACING } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-
 const { width } = Dimensions.get('window');
 
-const MOCK_PREV_STATS = {
-  explorationIndex: 58,
-  discoveryRate: 22,
-  replayFrequency: 45,
-  estimatedMinutes: 1240,
-  topGenres: [{ genre: 'pop', count: 8 }, { genre: 'r&b', count: 5 }],
+// Fallback only used when there is genuinely no previous week data at all
+const EMPTY_PREV_STATS = {
+  explorationIndex: null,
+  discoveryRate: null,
+  replayFrequency: null,
+  estimatedMinutes: null,
+  topGenres: [],
 };
 
 export default function StatsScreen() {
   const [currentStats, setCurrentStats] = useState(null);
-  const [prevStats] = useState(MOCK_PREV_STATS);
+  const [prevStats, setPrevStats] = useState(EMPTY_PREV_STATS);
   const [wrap, setWrap] = useState(null);
+  const [prevWrap, setPrevWrap] = useState(null);
+  const [hasPrevData, setHasPrevData] = useState(false);
 
   useEffect(() => { loadStats(); }, []);
 
   const loadStats = async () => {
-    const cached = await AsyncStorage.getItem('weekly_wrap');
-    if (cached) {
-      const { stats, wrap: w } = JSON.parse(cached);
-      setCurrentStats(stats);
-      setWrap(w);
+    try {
+      // Load current week
+      const cached = await AsyncStorage.getItem('weekly_wrap');
+      if (cached) {
+        const { stats, wrap: w } = JSON.parse(cached);
+        setCurrentStats(stats);
+        setWrap(w);
+      }
+
+      // Load previous week — saved by HomeScreen when a new week starts
+      const prevCached = await AsyncStorage.getItem('prev_weekly_wrap');
+      if (prevCached) {
+        const { stats: ps, wrap: pw } = JSON.parse(prevCached);
+        if (ps) {
+          setPrevStats({
+            explorationIndex: ps.explorationIndex ?? null,
+            discoveryRate: ps.discoveryRate ?? null,
+            replayFrequency: ps.replayFrequency ?? null,
+            estimatedMinutes: ps.estimatedMinutes ?? null,
+            topGenres: ps.topGenres || [],
+          });
+          setPrevWrap(pw);
+          setHasPrevData(true);
+        }
+      }
+    } catch (e) {
+      console.error('StatsScreen loadStats error:', e);
     }
   };
 
-  const getDelta = (curr, prev) => (curr == null || prev == null) ? null : curr - prev;
+  // Returns null if either value is missing (no prev data yet)
+  const getDelta = (curr, prev) => {
+    if (curr == null || prev == null) return null;
+    return Math.round(curr - prev);
+  };
 
   const metrics = currentStats ? [
-    { label: 'Exploration Index', current: currentStats.explorationIndex || 0, prev: prevStats.explorationIndex, unit: '/100', emoji: '🔭', color: COLORS.violet, desc: 'How adventurous your listening was', max: 100 },
-    { label: 'Discovery Rate', current: currentStats.discoveryRate || 0, prev: prevStats.discoveryRate, unit: '%', emoji: '✨', color: COLORS.cyan, desc: 'New artists you explored', max: 100 },
-    { label: 'Replay Frequency', current: currentStats.replayFrequency || 0, prev: prevStats.replayFrequency, unit: '%', emoji: '🔁', color: COLORS.gold, higherIsBetter: false, desc: 'Tracks played more than once', max: 100 },
-    { label: 'Est. Minutes', current: currentStats.estimatedMinutes || 0, prev: prevStats.estimatedMinutes, unit: ' min', emoji: '⏱', color: COLORS.green, desc: 'Total listening time this week', max: 2000 },
+    {
+      label: 'Exploration Index',
+      current: currentStats.explorationIndex || 0,
+      prev: prevStats.explorationIndex,
+      unit: '/100', emoji: '🔭', color: COLORS.violet,
+      desc: 'How adventurous your listening was', max: 100,
+    },
+    {
+      label: 'Discovery Rate',
+      current: currentStats.discoveryRate || 0,
+      prev: prevStats.discoveryRate,
+      unit: '%', emoji: '✨', color: COLORS.cyan,
+      desc: 'New artists you explored', max: 100,
+    },
+    {
+      label: 'Replay Frequency',
+      current: currentStats.replayFrequency || 0,
+      prev: prevStats.replayFrequency,
+      unit: '%', emoji: '🔁', color: COLORS.gold,
+      higherIsBetter: false,
+      desc: 'Tracks played more than once', max: 100,
+    },
+    {
+      label: 'Est. Minutes',
+      current: currentStats.estimatedMinutes || 0,
+      prev: prevStats.estimatedMinutes,
+      unit: ' min', emoji: '⏱', color: COLORS.green,
+      desc: 'Total listening time this week', max: 2000,
+    },
   ] : [];
 
   return (
@@ -55,22 +108,35 @@ export default function StatsScreen() {
           <Text style={styles.subtitle}>This week vs last week.</Text>
         </View>
 
+        {/* VS card */}
         <View style={styles.compCard}>
           <LinearGradient colors={['#0D0D22', '#1A1A2E']} style={styles.compGradient}>
             <View style={styles.compRow}>
               <View style={styles.compSide}>
                 <Text style={styles.compWeekLabel}>LAST WEEK</Text>
-                <Text style={styles.compWeekTitle}>The Baseline</Text>
+                <Text style={styles.compWeekTitle}>
+                  {hasPrevData ? (prevWrap?.week_label || 'Previous') : 'No data yet'}
+                </Text>
               </View>
-              <View style={styles.compDivider}><Text style={styles.compVS}>VS</Text></View>
+              <View style={styles.compDivider}>
+                <Text style={styles.compVS}>VS</Text>
+              </View>
               <View style={[styles.compSide, { alignItems: 'flex-end' }]}>
                 <Text style={styles.compWeekLabel}>THIS WEEK</Text>
-                <Text style={[styles.compWeekTitle, { color: COLORS.accent }]}>{wrap?.week_label || 'Current'}</Text>
+                <Text style={[styles.compWeekTitle, { color: COLORS.accent }]}>
+                  {wrap?.week_label || 'Current'}
+                </Text>
               </View>
             </View>
+            {!hasPrevData && (
+              <Text style={styles.noPrevHint}>
+                Last week's baseline will appear after your second weekly wrap.
+              </Text>
+            )}
           </LinearGradient>
         </View>
 
+        {/* Radial glance */}
         {currentStats && (
           <>
             <Text style={styles.sectionTitle}>AT A GLANCE</Text>
@@ -91,10 +157,15 @@ export default function StatsScreen() {
           </>
         )}
 
+        {/* Metric cards */}
         <Text style={[styles.sectionTitle, { marginTop: SPACING.md }]}>WEEK COMPARISON</Text>
         {metrics.map((metric, i) => {
           const delta = getDelta(metric.current, metric.prev);
-          const isPositive = metric.higherIsBetter === false ? (delta ?? 0) < 0 : (delta ?? 0) > 0;
+          const isPositive = metric.higherIsBetter === false
+            ? (delta ?? 0) < 0
+            : (delta ?? 0) > 0;
+          const prevDisplay = metric.prev != null ? `${metric.prev}${metric.unit}` : '—';
+
           return (
             <View key={i} style={styles.metricCard}>
               <View style={styles.metricHeader}>
@@ -104,11 +175,17 @@ export default function StatsScreen() {
                   <Text style={styles.metricDesc}>{metric.desc}</Text>
                 </View>
                 <View style={styles.metricValues}>
-                  <Text style={[styles.metricCurrent, { color: metric.color }]}>{metric.current}{metric.unit}</Text>
-                  {delta !== null && (
-                    <Text style={[styles.metricDelta, { color: isPositive ? COLORS.green : delta === 0 ? COLORS.textMuted : COLORS.accent }]}>
+                  <Text style={[styles.metricCurrent, { color: metric.color }]}>
+                    {metric.current}{metric.unit}
+                  </Text>
+                  {delta !== null ? (
+                    <Text style={[styles.metricDelta, {
+                      color: isPositive ? COLORS.green : delta === 0 ? COLORS.textMuted : COLORS.accent,
+                    }]}>
                       {delta > 0 ? '↑' : delta < 0 ? '↓' : '—'} {Math.abs(delta)}
                     </Text>
+                  ) : (
+                    <Text style={styles.metricDeltaNone}>vs —</Text>
                   )}
                 </View>
               </View>
@@ -117,14 +194,22 @@ export default function StatsScreen() {
                   <View style={[styles.legendDot, { backgroundColor: metric.color }]} />
                   <Text style={styles.legendText}>This week</Text>
                   <View style={[styles.legendDot, { backgroundColor: COLORS.border }]} />
-                  <Text style={styles.legendText}>Last week</Text>
+                  <Text style={styles.legendText}>
+                    Last week {metric.prev != null ? `(${prevDisplay})` : '(no data)'}
+                  </Text>
                 </View>
-                <CompareBar thisWeek={metric.current} lastWeek={metric.prev} color={metric.color} maxVal={metric.max} />
+                <CompareBar
+                  thisWeek={metric.current}
+                  lastWeek={metric.prev ?? 0}
+                  color={metric.color}
+                  maxVal={metric.max}
+                />
               </View>
             </View>
           );
         })}
 
+        {/* Genre map */}
         {currentStats?.topGenres?.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>GENRE MAP</Text>
@@ -136,7 +221,11 @@ export default function StatsScreen() {
                   <Text style={styles.genreRank}>#{i + 1}</Text>
                   <Text style={styles.genreCompName} numberOfLines={1}>{g.genre}</Text>
                   <View style={styles.genreBarOuter}>
-                    <LinearGradient colors={[color, color + '88']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={[styles.genreBarFill, { width: `${pct}%` }]} />
+                    <LinearGradient
+                      colors={[color, color + '88']}
+                      start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                      style={[styles.genreBarFill, { width: `${pct}%` }]}
+                    />
                   </View>
                   <Text style={[styles.genreCount, { color }]}>{g.count}</Text>
                 </View>
@@ -145,6 +234,7 @@ export default function StatsScreen() {
           </View>
         )}
 
+        {/* Stability card */}
         {currentStats && (
           <View style={styles.stabilityCard}>
             <LinearGradient colors={['#0D1A0D', '#0A0A0F']} style={styles.stabilityGradient}>
@@ -155,10 +245,18 @@ export default function StatsScreen() {
                 </Text>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.stabilityTitle}>
-                    {currentStats.explorationIndex > 70 ? 'Explorer Mode' : currentStats.explorationIndex > 40 ? 'Balanced Listener' : 'Comfort Zone'}
+                    {currentStats.explorationIndex > 70
+                      ? 'Explorer Mode'
+                      : currentStats.explorationIndex > 40
+                        ? 'Balanced Listener'
+                        : 'Comfort Zone'}
                   </Text>
                   <Text style={styles.stabilityDesc}>
-                    {currentStats.explorationIndex > 70 ? 'You branched out hard this week.' : currentStats.explorationIndex > 40 ? 'Mix of new and familiar this week.' : "Sticking to what you know — and that's fine."}
+                    {currentStats.explorationIndex > 70
+                      ? 'You branched out hard this week.'
+                      : currentStats.explorationIndex > 40
+                        ? 'Mix of new and familiar this week.'
+                        : "Sticking to what you know — and that's fine."}
                   </Text>
                 </View>
               </View>
@@ -186,11 +284,21 @@ const styles = StyleSheet.create({
   compWeekTitle: { fontSize: FONTS.sizes.md, fontWeight: FONTS.weights.bold, color: COLORS.text },
   compDivider: { paddingHorizontal: SPACING.md },
   compVS: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, fontWeight: FONTS.weights.bold },
-  sectionTitle: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, fontWeight: FONTS.weights.bold, letterSpacing: 2, textTransform: 'uppercase', marginBottom: SPACING.sm },
-  radialRow: { flexDirection: 'row', justifyContent: 'space-around', backgroundColor: COLORS.bgCard, borderRadius: 16, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.lg },
+  noPrevHint: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, marginTop: SPACING.md, textAlign: 'center', opacity: 0.7 },
+  sectionTitle: {
+    fontSize: FONTS.sizes.xs, color: COLORS.textMuted, fontWeight: FONTS.weights.bold,
+    letterSpacing: 2, textTransform: 'uppercase', marginBottom: SPACING.sm,
+  },
+  radialRow: {
+    flexDirection: 'row', justifyContent: 'space-around', backgroundColor: COLORS.bgCard,
+    borderRadius: 16, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.lg,
+  },
   radialItem: { alignItems: 'center', gap: 8 },
   radialItemLabel: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted },
-  metricCard: { backgroundColor: COLORS.bgCard, borderRadius: 14, padding: SPACING.md, marginBottom: SPACING.sm, borderWidth: 1, borderColor: COLORS.border },
+  metricCard: {
+    backgroundColor: COLORS.bgCard, borderRadius: 14, padding: SPACING.md,
+    marginBottom: SPACING.sm, borderWidth: 1, borderColor: COLORS.border,
+  },
   metricHeader: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm },
   metricEmoji: { fontSize: 24 },
   metricInfo: { flex: 1 },
@@ -199,6 +307,7 @@ const styles = StyleSheet.create({
   metricValues: { alignItems: 'flex-end' },
   metricCurrent: { fontSize: FONTS.sizes.lg, fontWeight: FONTS.weights.black },
   metricDelta: { fontSize: FONTS.sizes.xs, fontWeight: FONTS.weights.medium },
+  metricDeltaNone: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, opacity: 0.5 },
   barSection: { gap: 6 },
   barLegendRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },

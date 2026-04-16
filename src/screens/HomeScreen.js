@@ -1,15 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  Animated,
-  RefreshControl,
-  ActivityIndicator,
-  Dimensions,
-  Image,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet,
+  Animated, RefreshControl, ActivityIndicator, Dimensions, Image, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as SecureStore from 'expo-secure-store';
@@ -37,23 +29,14 @@ const GUEST_WRAP = {
   energy_level: 'Medium',
   confidence: 0.85,
   story: 'This week you drifted through sounds like a silhouette in a slow-motion scene. The frequencies were yours alone — no algorithm could predict them.',
-  tamil_character: {
-    name: 'Vikram (Pithamagan)',
-    film: 'Pithamagan',
-    why_this_character: 'A presence that speaks volumes through silence. Your music choices this week carry that same brooding intensity.',
-  },
-  tamil_protagonist: {
-    archetype: 'The Silent Wanderer',
-    inspired_by: 'Pithamagan',
-  },
+  tamil_character: { name: 'Vikram (Pithamagan)', film: 'Pithamagan', why_this_character: 'A presence that speaks volumes through silence.' },
+  tamil_protagonist: { archetype: 'The Silent Wanderer', inspired_by: 'Pithamagan' },
 };
 
 const GUEST_STATS = {
   topGenres: [
-    { genre: 'indie soul', count: 18 },
-    { genre: 'cinematic', count: 14 },
-    { genre: 'dark ambient', count: 11 },
-    { genre: 'lo-fi hip hop', count: 8 },
+    { genre: 'indie soul', count: 18 }, { genre: 'cinematic', count: 14 },
+    { genre: 'dark ambient', count: 11 }, { genre: 'lo-fi hip hop', count: 8 },
     { genre: 'alternative r&b', count: 6 },
   ],
   topTracks: [
@@ -66,6 +49,7 @@ const GUEST_STATS = {
     { id: '2', name: 'Appear Here', genres: ['spotify required'], images: [] },
     { id: '3', name: 'Demo Mode', genres: ['guest preview'], images: [] },
   ],
+  estimatedMinutes: 0,
 };
 
 export default function HomeScreen({ navigation }) {
@@ -74,6 +58,7 @@ export default function HomeScreen({ navigation }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [regenLoading, setRegenLoading] = useState(false);
   const [isGuest, setIsGuest] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const didLoad = useRef(false);
@@ -103,6 +88,9 @@ export default function HomeScreen({ navigation }) {
           setStats(data.stats);
           fetchStatsOnly();
           return;
+        } else {
+          // New week — archive previous week before fetching fresh
+          await AsyncStorage.setItem('prev_weekly_wrap', cached);
         }
       }
       await fetchFreshData();
@@ -141,7 +129,6 @@ export default function HomeScreen({ navigation }) {
   const fetchFreshData = async () => {
     try {
       if (!spotifyToken) {
-        console.warn('No spotify token — cannot fetch');
         setWrap(GUEST_WRAP);
         setStats(GUEST_STATS);
         return;
@@ -150,7 +137,6 @@ export default function HomeScreen({ navigation }) {
       try {
         const cloudData = await apiService.getWrapFromCloud(currentWeekKey);
         if (cloudData.found) {
-          console.log('Loaded locked wrap from Atlas');
           setWrap(cloudData.wrap);
           setStats(cloudData.stats);
           await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ wrap: cloudData.wrap, stats: cloudData.stats, weekKey: currentWeekKey }));
@@ -165,11 +151,11 @@ export default function HomeScreen({ navigation }) {
         spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
         spotifyService.getRecentlyPlayed(spotifyToken, 50),
       ]);
-
       const computedStats = spotifyService.computeListeningStats(tracks, artists, recent);
       computedStats.topTracks = tracks;
       computedStats.topArtists = artists;
 
+      apiService.syncListeningHistory(currentWeekKey, tracks, artists, computedStats.topGenres, computedStats).catch(() => {});
       await AsyncStorage.setItem('my_top_tracks', JSON.stringify(tracks));
 
       const storedMoods = await AsyncStorage.getItem('mood_logs');
@@ -185,10 +171,8 @@ export default function HomeScreen({ navigation }) {
       }
 
       const aiWrap = await groqService.generateWeeklyWrap(computedStats, moods);
-
       setStats(computedStats);
       setWrap(aiWrap);
-
       await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ wrap: aiWrap, stats: computedStats, weekKey: currentWeekKey }));
 
       try {
@@ -203,7 +187,6 @@ export default function HomeScreen({ navigation }) {
       }
     } catch (e) {
       if (e?.response?.status === 401 || e?.status === 401) {
-        console.log('Spotify token expired — signing out');
         await AsyncStorage.clear();
         await SecureStore.deleteItemAsync('spotify_token');
         await SecureStore.deleteItemAsync('user_data');
@@ -214,6 +197,43 @@ export default function HomeScreen({ navigation }) {
       console.error('Fetch error:', e?.message);
       setWrap(GUEST_WRAP);
       setStats(GUEST_STATS);
+    }
+  };
+
+  // ── Regenerate character — backend enforces 24h cooldown ─────────────────
+  const regenerateCharacter = async () => {
+    if (!wrap || isGuest) return;
+    setRegenLoading(true);
+    try {
+      const currentWeekKey = getCurrentWeekKey();
+      const result = await apiService.regenerateCharacter(currentWeekKey);
+
+      const updatedWrap = {
+        ...wrap,
+        tamil_character: result.tamil_character,
+        tamil_protagonist: result.tamil_protagonist,
+      };
+      setWrap(updatedWrap);
+
+      const cached = await AsyncStorage.getItem('weekly_wrap');
+      if (cached) {
+        const data = JSON.parse(cached);
+        await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...data, wrap: updatedWrap }));
+      }
+    } catch (e) {
+      if (e?.response?.status === 429) {
+        const data = e.response.data;
+        Alert.alert(
+          'Come back tomorrow 🎭',
+          data.message || 'You can regenerate your character once per day.',
+          [{ text: 'Got it' }]
+        );
+      } else {
+        Alert.alert('Error', 'Could not regenerate character. Try again.');
+        console.error('Regen error:', e?.response?.data || e.message);
+      }
+    } finally {
+      setRegenLoading(false);
     }
   };
 
@@ -231,6 +251,8 @@ export default function HomeScreen({ navigation }) {
     return `${start.toLocaleDateString('en', { month: 'short', day: 'numeric' })} – ${now.toLocaleDateString('en', { month: 'short', day: 'numeric' })}`;
   };
 
+  const formatMinutes = (mins) => mins ? `${mins.toLocaleString()} min` : '0 min';
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -246,10 +268,7 @@ export default function HomeScreen({ navigation }) {
       {isGuest && (
         <View style={styles.guestBanner}>
           <Text style={styles.guestBannerText}>👀 Guest Preview — </Text>
-          <TouchableOpacity onPress={async () => {
-            await AsyncStorage.removeItem('guest_mode');
-            signOut();
-          }}>
+          <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('guest_mode'); signOut(); }}>
             <Text style={styles.guestBannerLink}>Sign in with Spotify →</Text>
           </TouchableOpacity>
         </View>
@@ -260,26 +279,28 @@ export default function HomeScreen({ navigation }) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />}
         contentContainerStyle={[styles.scrollContent, isGuest && { paddingTop: 96 }]}
       >
-        {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.greeting}>
-              Hey, {isGuest ? 'Guest' : (user?.displayName?.split(' ')[0] || 'listener')} 👋
-            </Text>
+            <Text style={styles.greeting}>Hey, {isGuest ? 'Guest' : (user?.displayName?.split(' ')[0] || 'listener')} 👋</Text>
             <Text style={styles.weekLabel}>{getWeekLabel()}</Text>
           </View>
-
-          {/* ── Profile button — shows Spotify profile pic or initial ── */}
           <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={styles.profileBtn}>
-            {user?.profileImage ? (
-              <Image source={{ uri: user.profileImage }} style={styles.profileBtnImage} />
-            ) : (
-              <Text style={styles.profileBtnText}>
-                {user?.displayName?.[0]?.toUpperCase() || '👤'}
-              </Text>
-            )}
+            {user?.profileImage
+              ? <Image source={{ uri: user.profileImage }} style={styles.profileBtnImage} />
+              : <Text style={styles.profileBtnText}>{user?.displayName?.[0]?.toUpperCase() || '👤'}</Text>}
           </TouchableOpacity>
         </View>
+
+        {/* ── Total Minutes Listened ── */}
+        {stats?.estimatedMinutes > 0 && (
+          <View style={styles.minutesCard}>
+            <Text style={styles.minutesIcon}>⏱</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.minutesLabel}>TOTAL MINUTES LISTENED</Text>
+              <Text style={styles.minutesValue}>{formatMinutes(stats.estimatedMinutes)}</Text>
+            </View>
+          </View>
+        )}
 
         {/* Hero wrap card */}
         {wrap && (
@@ -287,9 +308,7 @@ export default function HomeScreen({ navigation }) {
             <LinearGradient colors={['#1A0A1E', '#0D0D22', '#12121E']} style={styles.heroGradient}>
               <View style={styles.heroTop}>
                 <View style={styles.weekBadge}>
-                  <Text style={styles.weekBadgeText}>
-                    {isGuest ? 'DEMO WRAP' : "THIS WEEK'S WRAP"}
-                  </Text>
+                  <Text style={styles.weekBadgeText}>{isGuest ? 'DEMO WRAP' : "THIS WEEK'S WRAP"}</Text>
                 </View>
                 <Text style={styles.confidenceBadge}>{Math.round((wrap.confidence || 0.8) * 100)}% vibe match</Text>
               </View>
@@ -322,6 +341,15 @@ export default function HomeScreen({ navigation }) {
                   )}
                 </View>
               )}
+
+              {/* Regenerate Character — backend-enforced 24h cooldown */}
+              {!isGuest && (
+                <TouchableOpacity style={styles.regenBtn} onPress={regenerateCharacter} disabled={regenLoading} activeOpacity={0.75}>
+                  {regenLoading
+                    ? <ActivityIndicator size="small" color={COLORS.violet} />
+                    : <Text style={styles.regenBtnText}>🎭 Regenerate Character</Text>}
+                </TouchableOpacity>
+              )}
             </LinearGradient>
           </View>
         )}
@@ -353,9 +381,7 @@ export default function HomeScreen({ navigation }) {
         {stats?.topTracks?.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Top Tracks This Week</Text>
-            {stats.topTracks.slice(0, 5).map((track, i) => (
-              <TrackRow key={track.id} track={track} rank={i + 1} />
-            ))}
+            {stats.topTracks.slice(0, 5).map((track, i) => <TrackRow key={track.id} track={track} rank={i + 1} />)}
           </View>
         )}
 
@@ -364,9 +390,7 @@ export default function HomeScreen({ navigation }) {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Your Artists</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.artistScroll}>
-              {stats.topArtists.slice(0, 8).map((artist, i) => (
-                <ArtistChip key={artist.id} artist={artist} rank={i + 1} />
-              ))}
+              {stats.topArtists.slice(0, 8).map((artist, i) => <ArtistChip key={artist.id} artist={artist} rank={i + 1} />)}
             </ScrollView>
           </View>
         )}
@@ -382,13 +406,9 @@ function TrackRow({ track, rank }) {
   return (
     <View style={styles.trackRow}>
       <Text style={styles.trackRank}>#{rank}</Text>
-      {imageUrl ? (
-        <Image source={{ uri: imageUrl }} style={styles.trackImage} />
-      ) : (
-        <View style={[styles.trackImage, styles.trackImageFallback]}>
-          <Text style={{ fontSize: 14 }}>🎵</Text>
-        </View>
-      )}
+      {imageUrl
+        ? <Image source={{ uri: imageUrl }} style={styles.trackImage} />
+        : <View style={[styles.trackImage, styles.trackImageFallback]}><Text style={{ fontSize: 14 }}>🎵</Text></View>}
       <View style={styles.trackInfo}>
         <Text style={styles.trackName} numberOfLines={1}>{track.name}</Text>
         <Text style={styles.trackArtist} numberOfLines={1}>{track.artists?.[0]?.name}</Text>
@@ -406,17 +426,13 @@ function ArtistChip({ artist, rank }) {
   const imageUrl = artist.images?.[1]?.url || artist.images?.[0]?.url;
   return (
     <View style={[styles.artistChip, { borderColor: color + '55' }]}>
-      {imageUrl ? (
-        <Image source={{ uri: imageUrl }} style={styles.artistImage} />
-      ) : (
-        <View style={[styles.artistImage, { backgroundColor: color + '33', alignItems: 'center', justifyContent: 'center' }]}>
-          <Text style={[styles.artistAvatarText, { color }]}>{artist.name[0]}</Text>
-        </View>
-      )}
+      {imageUrl
+        ? <Image source={{ uri: imageUrl }} style={styles.artistImage} />
+        : <View style={[styles.artistImage, { backgroundColor: color + '33', alignItems: 'center', justifyContent: 'center' }]}>
+            <Text style={[styles.artistAvatarText, { color }]}>{artist.name[0]}</Text>
+          </View>}
       <Text style={styles.artistChipName} numberOfLines={1}>{artist.name}</Text>
-      {artist.genres?.[0] && (
-        <Text style={styles.artistGenre} numberOfLines={1}>{artist.genres[0]}</Text>
-      )}
+      {artist.genres?.[0] && <Text style={styles.artistGenre} numberOfLines={1}>{artist.genres[0]}</Text>}
     </View>
   );
 }
@@ -429,33 +445,24 @@ const styles = StyleSheet.create({
   guestBanner: {
     position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
     backgroundColor: COLORS.gold + '22', borderBottomWidth: 1, borderBottomColor: COLORS.gold + '55',
-    paddingTop: 52, paddingBottom: 10, paddingHorizontal: SPACING.md,
-    flexDirection: 'row', alignItems: 'center',
+    paddingTop: 52, paddingBottom: 10, paddingHorizontal: SPACING.md, flexDirection: 'row', alignItems: 'center',
   },
   guestBannerText: { color: COLORS.gold, fontSize: FONTS.sizes.xs, fontWeight: FONTS.weights.bold },
   guestBannerLink: { color: COLORS.accent, fontSize: FONTS.sizes.xs, fontWeight: FONTS.weights.bold, textDecorationLine: 'underline' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.lg },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md },
   greeting: { fontSize: FONTS.sizes.xl, fontWeight: FONTS.weights.bold, color: COLORS.text },
   weekLabel: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, marginTop: 2 },
-
-  // ── Profile button — clips image to circle ──
-  profileBtn: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: COLORS.bgCard, borderWidth: 1, borderColor: COLORS.border,
-    alignItems: 'center', justifyContent: 'center',
-    overflow: 'hidden', // clips profile image to circle
+  profileBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.bgCard, borderWidth: 1, borderColor: COLORS.border, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  profileBtnImage: { width: 44, height: 44, borderRadius: 22 },
+  profileBtnText: { fontSize: 18, color: COLORS.textMuted, fontWeight: FONTS.weights.bold },
+  minutesCard: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACING.md,
+    backgroundColor: COLORS.bgCard, borderRadius: 14, padding: SPACING.md,
+    borderWidth: 1, borderColor: COLORS.cyan + '44', marginBottom: SPACING.md,
   },
-  profileBtnImage: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-  },
-  profileBtnText: {
-    fontSize: 18,
-    color: COLORS.textMuted,
-    fontWeight: FONTS.weights.bold,
-  },
-
+  minutesIcon: { fontSize: 28 },
+  minutesLabel: { fontSize: 9, color: COLORS.textMuted, fontWeight: FONTS.weights.bold, letterSpacing: 2, marginBottom: 3 },
+  minutesValue: { fontSize: FONTS.sizes.xl, fontWeight: FONTS.weights.black, color: COLORS.cyan },
   heroCard: { borderRadius: 20, overflow: 'hidden', marginBottom: SPACING.lg, borderWidth: 1, borderColor: COLORS.border },
   heroGradient: { padding: SPACING.lg },
   heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md },
@@ -474,10 +481,12 @@ const styles = StyleSheet.create({
   characterName: { fontSize: FONTS.sizes.xl, fontWeight: FONTS.weights.black, color: COLORS.text, marginBottom: 2 },
   characterFilm: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, marginBottom: SPACING.sm },
   characterWhy: { fontSize: FONTS.sizes.sm, color: COLORS.textMuted, lineHeight: 20, fontStyle: 'italic' },
-  archetypeRow: { paddingTop: SPACING.sm, borderTopWidth: 1, borderTopColor: COLORS.border },
+  archetypeRow: { paddingTop: SPACING.sm, borderTopWidth: 1, borderTopColor: COLORS.border, marginBottom: SPACING.md },
   archetypeLabel: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, marginBottom: 4 },
   archetypeValue: { fontSize: FONTS.sizes.md, fontWeight: FONTS.weights.bold, color: COLORS.violet, marginBottom: 2 },
   archetypeInspired: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, fontStyle: 'italic' },
+  regenBtn: { marginTop: SPACING.sm, borderWidth: 1, borderColor: COLORS.violet + '66', borderRadius: 12, paddingVertical: 10, alignItems: 'center', backgroundColor: COLORS.violet + '15' },
+  regenBtnText: { color: COLORS.violet, fontSize: FONTS.sizes.xs, fontWeight: FONTS.weights.bold, letterSpacing: 0.5 },
   section: { marginBottom: SPACING.lg },
   sectionTitle: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted, fontWeight: FONTS.weights.bold, letterSpacing: 2, textTransform: 'uppercase', marginBottom: SPACING.sm },
   genreList: { gap: SPACING.sm },

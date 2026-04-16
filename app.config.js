@@ -1,6 +1,6 @@
-import 'dotenv/config';
+try { require('dotenv').config(); } catch (_) {}
 
-export default {
+module.exports = {
   expo: {
     name: "BeatWrap!",
     slug: "beatwrap",

@@ -5,7 +5,6 @@ const BACKEND_URL = Constants.expoConfig?.extra?.BACKEND_URL || 'https://beatwra
 
 const api = axios.create({ baseURL: BACKEND_URL });
 
-// Retry once on network error
 api.interceptors.response.use(
   res => res,
   async err => {
@@ -41,23 +40,30 @@ export const apiService = {
     const res = await api.post('/api/auth/username', { username });
     return res.data;
   },
-  // ── Profile stats (was missing — caused silent crash in ProfileScreen) ──
   getProfileStats: async () => {
     const res = await api.get('/api/auth/stats');
-    return res.data; // { wraps, moodDays, friends }
+    return res.data;
   },
 
-  // ── Wrap (Atlas storage) ──────────────────────────────────────────
+  // ── Wrap ──────────────────────────────────────────────────────────
   getWrapFromCloud: async (weekKey) => {
     const res = await api.get('/api/wrap/current', { params: { weekKey } });
-    return res.data; // { found, wrap, stats, weekKey }
+    return res.data;
   },
   saveWrapToCloud: async (weekKey, aiWrap, stats) => {
     const res = await api.post('/api/wrap/save', { weekKey, aiWrap, stats });
-    return res.data; // { saved, wrap, stats }
+    return res.data;
   },
   getWrapHistory: async (currentWeekKey) => {
     const res = await api.get('/api/wrap/history', { params: { currentWeekKey } });
+    return res.data;
+  },
+
+  // NEW: regenerate character — backend enforces 24h cooldown
+  // Returns: { success, tamil_character, tamil_protagonist } on success
+  // Returns: { error: 'cooldown', message, hoursLeft } on 429
+  regenerateCharacter: async (weekKey) => {
+    const res = await api.post('/api/wrap/regenerate-character', { weekKey });
     return res.data;
   },
 
@@ -68,7 +74,7 @@ export const apiService = {
   },
   searchUsers: async (query) => {
     const res = await api.get('/api/friends/search', { params: { q: query } });
-    return res.data; // { users: [] }
+    return res.data;
   },
   sendFriendRequest: async (fromId, toId) => {
     const res = await api.post('/api/friends/request', { fromId, toId });
@@ -94,7 +100,7 @@ export const apiService = {
   // ── Messages ─────────────────────────────────────────────────────
   getMessages: async (friendId) => {
     const res = await api.get(`/api/messages/${friendId}`);
-    return res.data; // { messages: [] }
+    return res.data;
   },
   getConversations: async () => {
     const res = await api.get('/api/messages');
@@ -108,7 +114,11 @@ export const apiService = {
   },
   getWeekMoods: async (weekKey) => {
     const res = await api.get('/api/mood/week', { params: { weekKey } });
-    return res.data; // { moods: { 0: {...}, 1: {...} } }
+    return res.data;
+  },
+  syncListeningHistory: async (weekKey, topTracks, topArtists, topGenres, stats) => {
+    const res = await api.post('/api/listening/sync', { weekKey, topTracks, topArtists, topGenres, stats });
+    return res.data;
   },
   getCompatibility: async (userId, friendId) => {
     const res = await api.get(`/api/friends/compatibility/${userId}/${friendId}`);

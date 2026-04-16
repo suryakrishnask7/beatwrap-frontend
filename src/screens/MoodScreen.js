@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Modal, Dimensions, Image,
@@ -10,7 +10,6 @@ import { spotifyService } from '../services/spotifyService';
 import { apiService } from '../services/apiService';
 import { COLORS, FONTS, SPACING, MOODS } from '../utils/constants';
 
-const Haptics = { impactAsync: () => {}, ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' } };
 const { width } = Dimensions.get('window');
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -33,35 +32,52 @@ export default function MoodScreen() {
   const [note, setNote] = useState('');
   const [currentDayIndex, setCurrentDayIndex] = useState(0);
   const [loadingMusic, setLoadingMusic] = useState(false);
+  const hasFetchedFromAtlas = useRef(false);
 
   useEffect(() => {
-    loadMoods();
-    fetchDailyMusic();
     const day = new Date().getDay();
     setCurrentDayIndex(day === 0 ? 6 : day - 1);
-  }, []);
+    loadMoods();
+    fetchDailyMusic();
+  }, [user?._id]); // Re-run when user changes (login/logout)
 
   const loadMoods = async () => {
-    // Load local first for instant display
-    const stored = await AsyncStorage.getItem('mood_logs');
-    if (stored) setMoodLogs(JSON.parse(stored));
+    // Step 1: Load from AsyncStorage immediately for instant display
+    try {
+      const stored = await AsyncStorage.getItem('mood_logs');
+      if (stored) {
+        setMoodLogs(JSON.parse(stored));
+      }
+    } catch {}
 
-    // Then sync from Atlas if logged in
+    // Step 2: Always sync from Atlas for logged-in non-guest users
+    // This is the fix — we always fetch from Atlas, not just on first load
     if (!user?._id || user.isGuest) return;
+
     try {
       const weekKey = getCurrentWeekKey();
       const res = await apiService.getWeekMoods(weekKey);
       if (res.moods && Object.keys(res.moods).length > 0) {
+        // Atlas has data — use it as source of truth
         setMoodLogs(res.moods);
         await AsyncStorage.setItem('mood_logs', JSON.stringify(res.moods));
+      } else {
+        // Atlas has nothing for this week — local cache might be stale from a previous week
+        // Check if the local data is for the current week by verifying keys
+        // If no Atlas data, reset local to empty for this week
+        setMoodLogs({});
+        await AsyncStorage.setItem('mood_logs', JSON.stringify({}));
       }
     } catch (e) {
       console.log('Could not sync moods from Atlas:', e?.message);
+      // Keep whatever we loaded from AsyncStorage
     }
   };
 
   const fetchDailyMusic = async () => {
     if (!spotifyToken) return;
+
+    // Check cache freshness — only re-fetch if older than 30 mins
     const lastFetchRaw = await AsyncStorage.getItem('daily_music_last_fetch');
     const lastFetch = lastFetchRaw ? parseInt(lastFetchRaw) : 0;
     const THIRTY_MINS = 30 * 60 * 1000;
@@ -75,13 +91,15 @@ export default function MoodScreen() {
       const existingRaw = await AsyncStorage.getItem('daily_music');
       const existing = existingRaw ? JSON.parse(existingRaw) : {};
       const byDay = { ...existing };
+
       recent.forEach(item => {
         const playedAt = new Date(item.played_at);
         const now = new Date();
         const monday = new Date(now);
         monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
         monday.setHours(0, 0, 0, 0);
-        if (playedAt < monday) return;
+        if (playedAt < monday) return; // Ignore tracks from previous weeks
+
         const dayOfWeek = playedAt.getDay();
         const dayIdx = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
         if (!byDay[dayIdx]) byDay[dayIdx] = { tracks: [], artistMap: {} };
@@ -94,12 +112,14 @@ export default function MoodScreen() {
           byDay[dayIdx].artistMap[a.id] = a.name;
         });
       });
+
       Object.keys(byDay).forEach(day => {
         if (byDay[day].artistMap) {
           byDay[day].artists = Object.values(byDay[day].artistMap).slice(0, 4);
           delete byDay[day].artistMap;
         }
       });
+
       setDailyMusic(byDay);
       await AsyncStorage.setItem('daily_music', JSON.stringify(byDay));
       await AsyncStorage.setItem('daily_music_last_fetch', String(Date.now()));
@@ -112,7 +132,6 @@ export default function MoodScreen() {
 
   const saveMood = async () => {
     if (!selectedMood || selectedDay === null) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const updated = {
       ...moodLogs,
@@ -124,6 +143,8 @@ export default function MoodScreen() {
         timestamp: Date.now(),
       },
     };
+
+    // Update state and local cache immediately
     setMoodLogs(updated);
     await AsyncStorage.setItem('mood_logs', JSON.stringify(updated));
 
@@ -164,7 +185,14 @@ export default function MoodScreen() {
   };
 
   const getMoodColor = (value) => {
-    const map = { fired_up: COLORS.accent, chill: COLORS.cyan, midnight: COLORS.violet, electric: COLORS.gold, reflective: COLORS.textMuted, dramatic: '#FF6B6B' };
+    const map = {
+      fired_up: COLORS.accent,
+      chill: COLORS.cyan,
+      midnight: COLORS.violet,
+      electric: COLORS.gold,
+      reflective: COLORS.textMuted,
+      dramatic: '#FF6B6B',
+    };
     return map[value] || COLORS.border;
   };
 
@@ -185,7 +213,11 @@ export default function MoodScreen() {
             <Text style={styles.progressCount}>{loggedCount}/7 days logged</Text>
           </View>
           <View style={styles.progressBar}>
-            <LinearGradient colors={[COLORS.accent, COLORS.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={[styles.progressFill, { width: `${(loggedCount / 7) * 100}%` }]} />
+            <LinearGradient
+              colors={[COLORS.accent, COLORS.violet]}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={[styles.progressFill, { width: `${(loggedCount / 7) * 100}%` }]}
+            />
           </View>
         </View>
 
@@ -196,7 +228,16 @@ export default function MoodScreen() {
             const hasLog = !!log;
             const color = hasLog ? getMoodColor(log.value) : COLORS.border;
             return (
-              <TouchableOpacity key={index} style={[styles.dayCell, { borderColor: color }, isToday && styles.todayCell, hasLog && { backgroundColor: color + '18' }]} onPress={() => openModal(index)}>
+              <TouchableOpacity
+                key={index}
+                style={[
+                  styles.dayCell,
+                  { borderColor: color },
+                  isToday && styles.todayCell,
+                  hasLog && { backgroundColor: color + '18' },
+                ]}
+                onPress={() => openModal(index)}
+              >
                 <Text style={[styles.dayLabel, isToday && { color: COLORS.accent }]}>{day}</Text>
                 <Text style={styles.dayEmoji}>{hasLog ? log.emoji : isToday ? '＋' : '·'}</Text>
                 {hasLog && <Text style={[styles.dayMoodLabel, { color }]} numberOfLines={1}>{log.label}</Text>}
@@ -241,7 +282,10 @@ export default function MoodScreen() {
                         const imgUrl = track.album?.images?.[2]?.url || track.album?.images?.[0]?.url;
                         return (
                           <View key={ti} style={styles.miniTrackRow}>
-                            {imgUrl ? <Image source={{ uri: imgUrl }} style={styles.miniTrackImg} /> : <View style={[styles.miniTrackImg, styles.miniTrackImgFallback]}><Text style={{ fontSize: 10 }}>♫</Text></View>}
+                            {imgUrl
+                              ? <Image source={{ uri: imgUrl }} style={styles.miniTrackImg} />
+                              : <View style={[styles.miniTrackImg, styles.miniTrackImgFallback]}><Text style={{ fontSize: 10 }}>♫</Text></View>
+                            }
                             <View style={styles.miniTrackInfo}>
                               <Text style={styles.miniTrackName} numberOfLines={1}>{track.name}</Text>
                               <Text style={styles.miniTrackArtist} numberOfLines={1}>{track.artists?.[0]?.name}</Text>
@@ -255,11 +299,17 @@ export default function MoodScreen() {
                     <View style={styles.artistSection}>
                       <Text style={styles.musicSectionLabel}>🎤 ARTISTS</Text>
                       <View style={styles.artistPills}>
-                        {music.artists.map((name, ai) => <View key={ai} style={styles.artistPill}><Text style={styles.artistPillText}>{name}</Text></View>)}
+                        {music.artists.map((name, ai) => (
+                          <View key={ai} style={styles.artistPill}>
+                            <Text style={styles.artistPillText}>{name}</Text>
+                          </View>
+                        ))}
                       </View>
                     </View>
                   )}
-                  {!music?.tracks?.length && log && <Text style={styles.noMusicText}>No listening data for this day.</Text>}
+                  {!music?.tracks?.length && log && (
+                    <Text style={styles.noMusicText}>No listening data for this day.</Text>
+                  )}
                 </LinearGradient>
               </View>
             );
@@ -272,22 +322,46 @@ export default function MoodScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>{selectedDay !== null ? `${DAYS[selectedDay]}'s Vibe` : 'Log Mood'}</Text>
+            <Text style={styles.modalTitle}>
+              {selectedDay !== null ? `${DAYS[selectedDay]}'s Vibe` : 'Log Mood'}
+            </Text>
             <View style={styles.moodGrid}>
               {MOODS.map(mood => (
-                <TouchableOpacity key={mood.value} style={[styles.moodOption, selectedMood?.value === mood.value && { backgroundColor: getMoodColor(mood.value) + '33', borderColor: getMoodColor(mood.value) }]} onPress={() => setSelectedMood(mood)}>
+                <TouchableOpacity
+                  key={mood.value}
+                  style={[
+                    styles.moodOption,
+                    selectedMood?.value === mood.value && {
+                      backgroundColor: getMoodColor(mood.value) + '33',
+                      borderColor: getMoodColor(mood.value),
+                    },
+                  ]}
+                  onPress={() => setSelectedMood(mood)}
+                >
                   <Text style={styles.moodOptionEmoji}>{mood.emoji}</Text>
                   <Text style={styles.moodOptionLabel}>{mood.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-            <TextInput style={styles.noteInput} placeholder="Add a note... (optional)" placeholderTextColor={COLORS.textMuted} value={note} onChangeText={setNote} multiline maxLength={120} />
+            <TextInput
+              style={styles.noteInput}
+              placeholder="Add a note... (optional)"
+              placeholderTextColor={COLORS.textMuted}
+              value={note}
+              onChangeText={setNote}
+              multiline
+              maxLength={120}
+            />
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={saveMood} style={{ flex: 1 }}>
-                <LinearGradient colors={[COLORS.accent, '#CC1144']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.saveBtn}>
+                <LinearGradient
+                  colors={[COLORS.accent, '#CC1144']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={styles.saveBtn}
+                >
                   <Text style={styles.saveBtnText}>Save Vibe</Text>
                 </LinearGradient>
               </TouchableOpacity>
@@ -351,7 +425,7 @@ const styles = StyleSheet.create({
   modalHandle: { width: 40, height: 4, backgroundColor: COLORS.border, borderRadius: 2, alignSelf: 'center', marginBottom: SPACING.md },
   modalTitle: { fontSize: FONTS.sizes.xl, fontWeight: FONTS.weights.bold, color: COLORS.text, marginBottom: SPACING.md },
   moodGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: SPACING.md },
-  moodOption: { width: (Dimensions.get('window').width - SPACING.lg * 2 - 30) / 3, backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.border, alignItems: 'center', paddingVertical: SPACING.md },
+  moodOption: { width: (width - SPACING.lg * 2 - 30) / 3, backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.border, alignItems: 'center', paddingVertical: SPACING.md },
   moodOptionEmoji: { fontSize: 28, marginBottom: 4 },
   moodOptionLabel: { fontSize: FONTS.sizes.xs, color: COLORS.textMuted },
   noteInput: { backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, color: COLORS.text, fontSize: FONTS.sizes.sm, marginBottom: SPACING.md, minHeight: 60 },

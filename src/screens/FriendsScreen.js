@@ -209,16 +209,17 @@ export default function FriendsScreen({ route }) {
     setRequests(prev => prev.filter(r => r._id !== req._id));
   };
 
-  const checkCompatibility = async (friend) => {
+   const checkCompatibility = async (friend) => {
     setSelectedFriend(friend);
     setLoadingCompat(true);
     setCompatibility(null);
     try {
       const result = await apiService.getCompatibility(user._id, friend._id);
+      // FIX: result may now contain noData:true when one/both users have no wrap yet
       setCompatibility(result);
     } catch (e) {
       console.log('Compatibility error:', e?.message);
-      setCompatibility({ score: 0, vibe_description: 'No wrap data yet — come back after your first wrap!', shared_traits: [], chemistry: 'Generate your weekly wrap first.' });
+      setCompatibility({ noData: true, message: 'Could not load compatibility. Try again.' });
     } finally {
       setLoadingCompat(false);
     }
@@ -285,39 +286,55 @@ export default function FriendsScreen({ route }) {
       {activeTab === 'Friends' && (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {/* Compatibility card */}
-          {selectedFriend && (
-            <View style={styles.compatCard}>
-              <LinearGradient colors={['#1A0A1E', '#0D0D22']} style={styles.compatGradient}>
-                <Text style={styles.compatHeader}>VIBE MATCH</Text>
-                <View style={styles.compatNames}>
-                  <Text style={styles.compatName}>You</Text>
-                  <View style={styles.compatScoreWrap}>
-                    {loadingCompat ? <ActivityIndicator color={COLORS.accent} /> : (
-                      <>
-                        <Text style={[styles.compatScore, { color: getScoreColor(compatibility?.score || 0) }]}>{compatibility?.score ?? '—'}%</Text>
-                        <Text style={styles.compatScoreLabel}>match</Text>
-                      </>
-                    )}
-                  </View>
-                  <Text style={[styles.compatName, { textAlign: 'right' }]}>{selectedFriend.displayName}</Text>
-                </View>
-                {compatibility && !loadingCompat && (
-                  <>
-                    <View style={styles.compatBar}>
-                      <LinearGradient colors={[COLORS.accent, getScoreColor(compatibility.score)]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={[styles.compatBarFill, { width: `${compatibility.score}%` }]} />
-                    </View>
-                    <Text style={styles.compatDesc}>{compatibility.vibe_description}</Text>
-                    <Text style={styles.compatChemistry}>"{compatibility.chemistry}"</Text>
-                    <View style={styles.sharedTraits}>
-                      {(compatibility.shared_traits || []).map((t, i) => (
-                        <View key={i} style={styles.trait}><Text style={styles.traitText}>{t}</Text></View>
-                      ))}
-                    </View>
-                  </>
-                )}
-              </LinearGradient>
-            </View>
-          )}
+            {selectedFriend && (
+    <View style={styles.compatCard}>
+      <LinearGradient colors={['#1A0A1E', '#0D0D22']} style={styles.compatGradient}>
+        <Text style={styles.compatHeader}>VIBE MATCH</Text>
+        <View style={styles.compatNames}>
+          <Text style={styles.compatName}>You</Text>
+          <View style={styles.compatScoreWrap}>
+            {loadingCompat ? <ActivityIndicator color={COLORS.accent} /> : (
+              compatibility?.noData ? (
+                <Text style={styles.compatNoDataScore}>—</Text>
+              ) : (
+                <>
+                  <Text style={[styles.compatScore, { color: getScoreColor(compatibility?.score || 0) }]}>
+                    {compatibility?.score ?? '—'}%
+                  </Text>
+                  <Text style={styles.compatScoreLabel}>match</Text>
+                </>
+              )
+            )}
+          </View>
+          <Text style={[styles.compatName, { textAlign: 'right' }]}>{selectedFriend.displayName}</Text>
+        </View>
+ 
+        {compatibility && !loadingCompat && (
+          compatibility.noData ? (
+            // FIX: show clear message instead of fake score
+            <Text style={styles.compatNoDataMsg}>{compatibility.message}</Text>
+          ) : (
+            <>
+              <View style={styles.compatBar}>
+                <LinearGradient
+                  colors={[COLORS.accent, getScoreColor(compatibility.score)]}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={[styles.compatBarFill, { width: `${compatibility.score}%` }]}
+                />
+              </View>
+              <Text style={styles.compatDesc}>{compatibility.vibe_description}</Text>
+              <Text style={styles.compatChemistry}>"{compatibility.chemistry}"</Text>
+              <View style={styles.sharedTraits}>
+                {(compatibility.shared_traits || []).map((t, i) => (
+                  <View key={i} style={styles.trait}><Text style={styles.traitText}>{t}</Text></View>
+                ))}
+              </View>
+            </>
+          )
+        )}
+      </LinearGradient>
+    </View>
+  )}
 
           {friends.length === 0 ? (
             <View style={styles.emptyState}>
@@ -560,6 +577,8 @@ const styles = StyleSheet.create({
   tabText: { color: COLORS.textMuted, fontSize: FONTS.sizes.xs, fontWeight: FONTS.weights.medium },
   tabTextActive: { color: COLORS.accent, fontWeight: FONTS.weights.bold },
   scroll: { paddingHorizontal: SPACING.md, paddingTop: SPACING.sm },
+    compatNoDataScore: { fontSize: FONTS.sizes.xxl, fontWeight: FONTS.weights.black, color: COLORS.textMuted },
+  compatNoDataMsg: { fontSize: FONTS.sizes.sm, color: COLORS.textMuted, textAlign: 'center', lineHeight: 22, paddingVertical: SPACING.sm },
 
   compatCard: { borderRadius: 20, overflow: 'hidden', marginBottom: SPACING.lg, borderWidth: 1, borderColor: COLORS.accent + '33' },
   compatGradient: { padding: SPACING.lg },
