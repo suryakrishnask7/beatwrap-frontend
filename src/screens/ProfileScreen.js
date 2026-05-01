@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/apiService';
 import { COLORS, FONTS, SPACING } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notificationService } from '../services/notificationService';
 
 export default function ProfileScreen() {
   const { user, signOut } = useAuth();
@@ -15,8 +16,25 @@ export default function ProfileScreen() {
   const [stats, setStats] = useState({ wraps: '—', moodDays: '—', friends: '—' });
   const [loadingStats, setLoadingStats] = useState(true);
   const [currentWrap, setCurrentWrap] = useState(null);
+  const [imageError, setImageError] = useState(false);
 
-  useEffect(() => { loadStats(); loadCurrentWrap(); }, [user?._id]);
+  useEffect(() => { 
+    loadStats(); 
+    loadCurrentWrap(); 
+    AsyncStorage.getItem('notifications_on').then(val => {
+      setNotificationsOn(val !== 'false');
+    });
+  }, [user?._id]);
+
+  const handleToggleNotifications = async (val) => {
+    setNotificationsOn(val);
+    await AsyncStorage.setItem('notifications_on', val ? 'true' : 'false');
+    if (val) {
+      notificationService.scheduleDailyReminder(user);
+    } else {
+      notificationService.cancelAllReminders();
+    }
+  };
 
   const loadStats = async () => {
     try { const cached = await AsyncStorage.getItem('profile_stats'); if (cached) setStats(JSON.parse(cached)); } catch {}
@@ -76,7 +94,7 @@ export default function ProfileScreen() {
     {
       title: 'PREFERENCES',
       items: [
-        { icon: '🔔', label: 'Weekly Wrap Reminder', right: <Switch value={notificationsOn} onValueChange={setNotificationsOn} trackColor={{ false: '#2A2A40', true: '#FF336688' }} thumbColor={notificationsOn ? '#FF3366' : '#9090B0'} /> },
+        { icon: '🔔', label: 'Daily Sync Reminder', right: <Switch value={notificationsOn} onValueChange={handleToggleNotifications} trackColor={{ false: '#2A2A40', true: '#FF336688' }} thumbColor={notificationsOn ? '#FF3366' : '#9090B0'} /> },
         { icon: '🌙', label: 'Dark Mode', right: <Text style={styles.settingValue}>Always On</Text> },
       ],
     },
@@ -93,6 +111,7 @@ export default function ProfileScreen() {
       items: [
         { icon: '💬', label: 'Send Feedback', onPress: () => Linking.openURL('mailto:feedback@beatwrap.app?subject=BeatWrap Feedback'), chevron: true },
         { icon: '⭐', label: 'Rate BeatWrap!', onPress: () => Linking.openURL('https://play.google.com/store'), chevron: true },
+        { icon: '🔔', label: 'Test AI Notification', onPress: () => notificationService.testNotification(user), chevron: true },
       ],
     },
   ];
@@ -117,8 +136,8 @@ export default function ProfileScreen() {
 
             {/* Avatar */}
             <View style={styles.avatarWrap}>
-              {user?.profileImage
-                ? <Image source={{ uri: user.profileImage }} style={styles.avatar} />
+              {user?.profileImage && !imageError
+                ? <Image source={{ uri: user.profileImage }} style={styles.avatar} onError={() => setImageError(true)} />
                 : <LinearGradient colors={['#FF3366', '#8B5CF6']} style={styles.avatar}>
                     <Text style={styles.avatarInitials}>{initials}</Text>
                   </LinearGradient>

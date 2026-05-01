@@ -161,6 +161,35 @@ export const apiService = {
     const res = await api.post('/api/listening/sync', { weekKey, topTracks, topArtists, topGenres, stats });
     return res.data;
   },
+
+  // NEW: incremental sync — routes to /sync (absolute) or /incremental ($inc)
+  incrementalListeningSync: async ({ weekKey, addMinutes, dailyMinutes, dailyTopTracks, trackPlayCounts, isFullSync }) => {
+    if (isFullSync) {
+      // Full sync: absolute set via /sync endpoint
+      const res = await api.post('/api/listening/sync', {
+        weekKey,
+        stats: { estimatedMinutes: addMinutes },
+      });
+      // Also push per-day data via incremental (sync doesn't store daily)
+      await api.post('/api/listening/incremental', {
+        weekKey, addMinutes: 0, // don't double-count minutes
+        dailyMinutes, dailyTopTracks, trackPlayCounts,
+      }).catch(() => {});
+      return res.data;
+    }
+    // Incremental: $inc on backend
+    const res = await api.post('/api/listening/incremental', {
+      weekKey, addMinutes, dailyMinutes, dailyTopTracks, trackPlayCounts,
+    });
+    return res.data;
+  },
+
+  // NEW: fetch stored history for a week (for MoodScreen daily view + StatsScreen)
+  getListeningHistory: async (weekKey) => {
+    const res = await api.get('/api/listening/history', { params: { weekKey } });
+    return res.data;
+  },
+
   getCompatibility: async (userId, friendId) => {
     const res = await api.get(`/api/friends/compatibility/${userId}/${friendId}`);
     return res.data;

@@ -12,6 +12,8 @@ import { groqService } from '../services/groqService';
 import { COLORS, FONTS, SPACING } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiService } from '../services/apiService';
+import { runFullSync, runIncrementalSync, startSyncScheduler, stopSyncScheduler } from '../services/listeningSync';
+import { notificationService } from '../services/notificationService';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 
 const { width } = Dimensions.get('window');
@@ -114,6 +116,19 @@ export default function HomeScreen({ navigation }) {
     loadData();
   }, [authLoading]);
 
+  // Start hourly sync scheduler when we have a Spotify token
+  useEffect(() => {
+    if (!spotifyToken || isGuest) return;
+    startSyncScheduler(spotifyToken);
+    
+    // Also schedule the daily reminder notification
+    AsyncStorage.getItem('notifications_on').then(val => {
+      if (val !== 'false' && user) notificationService.scheduleDailyReminder(user);
+    });
+
+    return () => stopSyncScheduler();
+  }, [spotifyToken]);
+
   // If user object has no profileImage (old accounts), fetch from Spotify in background
   useEffect(() => {
     if (!spotifyToken || user?.profileImage || spotifyProfileImg) return;
@@ -162,7 +177,9 @@ export default function HomeScreen({ navigation }) {
   const fetchStatsOnly = async () => {
     try {
       if (!spotifyToken) return;
-      // Run all three Spotify calls + accurate week-minutes in parallel
+      // Run incremental sync (picks up new plays since last hour)
+      const syncData = await runIncrementalSync(spotifyToken).catch(() => null);
+
       const [tracks, artists, recent, accurateMinutes] = await Promise.all([
         spotifyService.getTopTracks(spotifyToken, 'short_term', 20),
         spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
@@ -170,8 +187,8 @@ export default function HomeScreen({ navigation }) {
         spotifyService.getWeekMinutes(spotifyToken).catch(() => 0),
       ]);
       const computedStats = spotifyService.computeListeningStats(tracks, artists, recent);
-      computedStats.estimatedMinutes = accurateMinutes; // inject accurate value
-      computedStats.topTracks = tracks;
+      computedStats.estimatedMinutes = accurateMinutes;
+      computedStats.topTracks  = tracks;
       computedStats.topArtists = artists;
       setStats(computedStats);
       const cached = await AsyncStorage.getItem('weekly_wrap');
@@ -191,34 +208,32 @@ export default function HomeScreen({ navigation }) {
         if (cloudData.found) {
           setWrap(cloudData.wrap); setStats(cloudData.stats);
           await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ wrap: cloudData.wrap, stats: cloudData.stats, weekKey: currentWeekKey }));
-          // Still refresh accurate minutes in background and update stored stats
-          spotifyService.getWeekMinutes(spotifyToken).then(async (mins) => {
-            if (!mins) return;
+          // Background: full sync updates per-day data + accurate minutes in DB
+          runFullSync(spotifyToken).then(async (syncData) => {
+            if (!syncData) return;
             const stored = await AsyncStorage.getItem('weekly_wrap');
             if (stored) {
               const d = JSON.parse(stored);
-              const updatedStats = { ...d.stats, estimatedMinutes: mins };
+              const updatedStats = { ...d.stats, estimatedMinutes: syncData.totalMinutes };
               setStats(updatedStats);
               await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...d, stats: updatedStats }));
-              apiService.syncListeningHistory(currentWeekKey, updatedStats.topTracks || [], updatedStats.topArtists || [], updatedStats.topGenres || [], updatedStats).catch(() => {});
             }
           }).catch(() => {});
           return;
         }
       } catch {}
 
-      // No cloud wrap — fetch everything including accurate minutes in parallel
-      const [tracks, artists, recent, accurateMinutes] = await Promise.all([
+      // No cloud wrap — run full sync (accurate minutes + per-day data) + top tracks/artists in parallel
+      const [tracks, artists, recent, syncData] = await Promise.all([
         spotifyService.getTopTracks(spotifyToken, 'short_term', 20),
         spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
         spotifyService.getRecentlyPlayed(spotifyToken, 50),
-        spotifyService.getWeekMinutes(spotifyToken).catch(() => 0),
+        runFullSync(spotifyToken).catch(() => null),
       ]);
       const computedStats = spotifyService.computeListeningStats(tracks, artists, recent);
-      computedStats.estimatedMinutes = accurateMinutes; // inject accurate value
-      computedStats.topTracks = tracks;
+      computedStats.estimatedMinutes = syncData?.totalMinutes || 0;
+      computedStats.topTracks  = tracks;
       computedStats.topArtists = artists;
-      apiService.syncListeningHistory(currentWeekKey, tracks, artists, computedStats.topGenres, computedStats).catch(() => {});
       await AsyncStorage.setItem('my_top_tracks', JSON.stringify(tracks));
       const storedMoods = await AsyncStorage.getItem('mood_logs');
       const moodLogsRaw = storedMoods ? JSON.parse(storedMoods) : {};
@@ -238,6 +253,7 @@ export default function HomeScreen({ navigation }) {
           await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ wrap: saved.wrap, stats: saved.stats, weekKey: currentWeekKey }));
         }
       } catch {}
+
     } catch (e) {
       if (e?.response?.status === 401) { signOut(); return; }
       setWrap(GUEST_WRAP); setStats(GUEST_STATS);
@@ -327,7 +343,12 @@ export default function HomeScreen({ navigation }) {
               ? <Image
                   source={{ uri: user?.profileImage || spotifyProfileImg }}
                   style={styles.avatarImg}
-                  onError={() => setSpotifyProfileImg(null)}
+                  onError={() => {
+                    setSpotifyProfileImg(null);
+                    if (user && user.profileImage) {
+                      user.profileImage = null; // force fallback to gradient
+                    }
+                  }}
                 />
               : <LinearGradient colors={[COLORS.accent, COLORS.violet]} style={styles.avatarGrad}>
                   <Text style={styles.avatarInitial}>{user?.displayName?.[0]?.toUpperCase() || '♪'}</Text>

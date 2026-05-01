@@ -471,4 +471,51 @@ Return ONLY valid JSON:
       };
     }
   },
+
+  async generateDailyNotifications(userName) {
+    const name = userName ? userName.split(' ')[0] : 'Listener';
+    const prompt = `Generate two short, personalized push notifications for a music tracking app called BeatWrap. 
+The user's name is ${name}.
+1. A morning notification (around 10 AM) hyping them up for the day's music.
+2. An evening notification (around 8 PM) reminding them to log their mood and lock in their daily minutes.
+
+Requirements:
+- MUST be a full sentence (about 10 to 15 words).
+- Start with their name (e.g., "${name}!").
+- Use exactly 1 or 2 emojis at the end.
+- Make it sound cinematic, cool, and music-focused. No generic corporate app speak.
+
+Return ONLY valid JSON format:
+{
+  "morning": "<full sentence text here>",
+  "evening": "<full sentence text here>"
+}`;
+
+    try {
+      const res = await axios.post(
+        `${GROQ_BASE}/chat/completions`,
+        {
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 150,
+          temperature: 0.8,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${GROQ_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const content = res.data.choices[0].message.content;
+      const clean = content.replace(/```json|```/g, '').trim();
+      return JSON.parse(clean);
+    } catch (e) {
+      return {
+        morning: `${name}! Set the tone for today with some fresh tracks 🎧`,
+        evening: `${name}! Lock in today's minutes and log your mood 🌙`
+      };
+    }
+  },
 };
