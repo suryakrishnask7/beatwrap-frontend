@@ -59,11 +59,52 @@ export const apiService = {
     return res.data;
   },
 
-  // NEW: regenerate character — backend enforces 24h cooldown
-  // Returns: { success, tamil_character, tamil_protagonist } on success
+  // NEW: manually trigger wrap generation from frontend stats
+  // Returns: { saved, data, stats, weekKey }
+  generateWrap: async (totalMinutes, topArtists, topTracks) => {
+    const res = await api.post('/api/wrap/generate', { totalMinutes, topArtists, topTracks });
+    return res.data;
+  },
+
+  // NEW: check if a specific friend has generated a wrap this week
+  // Returns: { hasWrap: false } OR { hasWrap: true, data: {...} }
+  getFriendWrap: async (friendId) => {
+    const res = await api.get(`/api/wrap/friend/${friendId}`);
+    return res.data;
+  },
+
+  // NEW: compare current week minutes vs last week
+  // Returns: { currentMinutes, lastMinutes, percentageChange }
+  getWrapComparison: async () => {
+    const res = await api.get('/api/wrap/compare');
+    return res.data;
+  },
+
+  // Regenerate character — backend enforces 24h cooldown
+  // Returns: { success, wrap } on success
   // Returns: { error: 'cooldown', message, hoursLeft } on 429
   regenerateCharacter: async (weekKey) => {
-    const res = await api.post('/api/wrap/regenerate-character', { weekKey });
+    const res = await api.post('/api/wrap/regenerate-wrap', { weekKey });
+    return res.data;
+  },
+
+  // ── Stats ─────────────────────────────────────────────────────────
+  // NEW: get total minutes listened in the current ISO week (live)
+  // Returns: { totalMinutes, source: 'sessions' | 'estimated' }
+  getCurrentWeekMinutes: async () => {
+    const res = await api.get('/api/stats/current-week-minutes');
+    return res.data;
+  },
+
+  // ── Sessions ─────────────────────────────────────────────────────
+  // NEW: call when a track starts playing — Returns: { sessionId }
+  startSession: async (trackId) => {
+    const res = await api.post('/api/sessions/start', { trackId });
+    return res.data;
+  },
+  // NEW: call when a track stops / is skipped — Returns: { success, durationSeconds }
+  endSession: async (sessionId, durationSeconds) => {
+    const res = await api.post('/api/sessions/end', { sessionId, durationSeconds });
     return res.data;
   },
 

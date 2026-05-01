@@ -9,6 +9,21 @@ import { getRuntimeConfig } from '../utils/runtimeConfig';
 
 WebBrowser.maybeCompleteAuthSession();
 
+// Deterministic gradient avatar — picks colors from name so it's always the same
+const AVATAR_PALETTES = [
+  ['#FF3366', '#8B5CF6'], ['#8B5CF6', '#06B6D4'], ['#FFD700', '#FF3366'],
+  ['#10B981', '#06B6D4'], ['#FF6B35', '#FFD700'], ['#06B6D4', '#10B981'],
+];
+
+function generateDefaultAvatar(seed = '') {
+  const idx = seed.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % AVATAR_PALETTES.length;
+  const [c1, c2] = AVATAR_PALETTES[idx];
+  const initial = (seed[0] || '♪').toUpperCase();
+  // Return a tiny SVG data-URI the Image component can render
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='${c1}'/><stop offset='1' stop-color='${c2}'/></linearGradient></defs><rect width='100' height='100' rx='50' fill='url(#g)'/><text x='50' y='62' font-size='42' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>${initial}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
 const AuthContext = createContext(null);
 
 const { SPOTIFY_CLIENT_ID, BACKEND_URL } = getRuntimeConfig();
@@ -99,9 +114,10 @@ export function AuthProvider({ children }) {
       ]);
 
       if (storedToken && storedUser) {
+        const parsedUser = JSON.parse(storedUser);
         const secsLeft = Math.floor((parseInt(storedExpiry || '0') - Date.now()) / 1000);
         if (storedJwt) setAuthToken(storedJwt);
-        setUser(JSON.parse(storedUser));
+        setUser(parsedUser);
         setJwtToken(storedJwt);
         if (secsLeft < 60) {
           setLoading(false);
@@ -110,6 +126,23 @@ export function AuthProvider({ children }) {
           setSpotifyToken(storedToken);
           if (storedRt && secsLeft > 0) scheduleRefresh(secsLeft);
           setLoading(false);
+
+          // If profileImage is missing (old accounts before fix), refresh from Spotify in background
+          if (!parsedUser.profileImage && storedToken) {
+            axios.get('https://api.spotify.com/v1/me', { headers: { Authorization: `Bearer ${storedToken}` } })
+              .then(async (res) => {
+                const img = res.data.images?.[1]?.url || res.data.images?.[0]?.url
+                  || generateDefaultAvatar(res.data.display_name || parsedUser.displayName || parsedUser._id);
+                const updated = { ...parsedUser, profileImage: img };
+                setUser(updated);
+                await SecureStore.setItemAsync('user_data', JSON.stringify(updated));
+              })
+              .catch(() => {
+                // At minimum use a local generated avatar
+                const fallback = generateDefaultAvatar(parsedUser.displayName || parsedUser._id || 'user');
+                setUser({ ...parsedUser, profileImage: fallback });
+              });
+          }
         }
       } else {
         setLoading(false);
@@ -130,25 +163,37 @@ export function AuthProvider({ children }) {
       const { accessToken, refreshToken, expiresIn = 3600 } = tokenRes;
 
       const profileRes = await axios.get('https://api.spotify.com/v1/me', { headers: { Authorization: `Bearer ${accessToken}` } });
+      const spotifyProfileImage =
+        profileRes.data.images?.[1]?.url ||
+        profileRes.data.images?.[0]?.url ||
+        generateDefaultAvatar(profileRes.data.display_name || profileRes.data.id);
+
       const backendRes = await axios.post(`${BACKEND_URL}/api/auth/spotify`, {
         spotifyId: profileRes.data.id,
         displayName: profileRes.data.display_name,
         email: profileRes.data.email,
-        profileImage: profileRes.data.images?.[0]?.url || null,
+        profileImage: spotifyProfileImage,
         spotifyToken: accessToken,
       });
       const { token: jwt, user: backendUser } = backendRes.data;
 
+      // Always merge profileImage from Spotify into local user — the backend
+      // may not echo it back, and the stored user is what the app displays.
+      const localUser = {
+        ...backendUser,
+        profileImage: backendUser.profileImage || spotifyProfileImage,
+      };
+
       await Promise.all([
         SecureStore.setItemAsync('spotify_token', accessToken),
-        SecureStore.setItemAsync('user_data', JSON.stringify(backendUser)),
+        SecureStore.setItemAsync('user_data', JSON.stringify(localUser)),
         SecureStore.setItemAsync('jwt_token', jwt),
         SecureStore.setItemAsync('spotify_token_expiry', String(Date.now() + expiresIn * 1000)),
         ...(refreshToken ? [SecureStore.setItemAsync('spotify_refresh_token', refreshToken)] : []),
       ]);
 
       setSpotifyToken(accessToken);
-      setUser(backendUser); // if backendUser.hasUsername=false → App.js shows UsernameScreen
+      setUser(localUser);
       setJwtToken(jwt);
       setAuthToken(jwt);
       scheduleRefresh(expiresIn);
