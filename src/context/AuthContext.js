@@ -31,6 +31,9 @@ const GUEST_USER = {
   username: 'guest', hasUsername: true, isGuest: true,
 };
 
+let isRefreshing = false;
+let refreshPromise = null;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [spotifyToken, setSpotifyToken] = useState(null);
@@ -41,7 +44,7 @@ export function AuthProvider({ children }) {
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
       clientId: SPOTIFY_CLIENT_ID,
-      scopes: ['user-top-read', 'user-read-recently-played', 'user-read-currently-playing', 'user-read-private', 'user-read-email'],
+      scopes: ['user-top-read', 'user-read-recently-played', 'user-read-currently-playing', 'user-read-private', 'user-read-email', 'playlist-modify-public'],
       usePKCE: true,
       redirectUri: REDIRECT_URI,
     },
@@ -68,21 +71,49 @@ export function AuthProvider({ children }) {
   };
 
   const refreshSpotifyToken = async () => {
-    try {
-      const rt = await SecureStore.getItemAsync('spotify_refresh_token');
-      if (!rt) { await doSignOut(); return; }
-      const params = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rt, client_id: SPOTIFY_CLIENT_ID });
-      const res = await axios.post('https://accounts.spotify.com/api/token', params.toString(), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-      const { access_token, refresh_token, expires_in } = res.data;
-      await SecureStore.setItemAsync('spotify_token', access_token);
-      if (refresh_token) await SecureStore.setItemAsync('spotify_refresh_token', refresh_token);
-      await SecureStore.setItemAsync('spotify_token_expiry', String(Date.now() + expires_in * 1000));
-      setSpotifyToken(access_token);
-      scheduleRefresh(expires_in);
-    } catch (e) {
-      console.error('Refresh failed:', e?.response?.data || e.message);
-      await doSignOut();
+    if (isRefreshing && refreshPromise) {
+      return refreshPromise;
     }
+
+    isRefreshing = true;
+    refreshPromise = (async () => {
+      try {
+        const rt = await SecureStore.getItemAsync('spotify_refresh_token');
+        if (!rt) { await doSignOut(); return; }
+        const params = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rt, client_id: SPOTIFY_CLIENT_ID });
+        const res = await axios.post('https://accounts.spotify.com/api/token', params.toString(), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+        const { access_token, refresh_token, expires_in } = res.data;
+        await SecureStore.setItemAsync('spotify_token', access_token);
+        if (refresh_token) await SecureStore.setItemAsync('spotify_refresh_token', refresh_token);
+        await SecureStore.setItemAsync('spotify_token_expiry', String(Date.now() + expires_in * 1000));
+        setSpotifyToken(access_token);
+        scheduleRefresh(expires_in);
+
+        // Also update backend so the cron job has a valid token
+        try {
+          const userData = await SecureStore.getItemAsync('user_data');
+          if (userData) {
+            const u = JSON.parse(userData);
+            await axios.post(`${BACKEND_URL}/api/auth/spotify`, {
+              spotifyId: u.spotifyId,
+              displayName: u.displayName,
+              email: u.email,
+              profileImage: u.profileImage,
+              spotifyToken: access_token,
+              spotifyRefreshToken: refresh_token || rt,
+              expiresIn: expires_in,
+            });
+          }
+        } catch {} // non-critical
+      } catch (e) {
+        console.error('Refresh failed:', e?.response?.data || e.message);
+        await doSignOut();
+      } finally {
+        isRefreshing = false;
+        refreshPromise = null;
+      }
+    })();
+    return refreshPromise;
   };
 
   const loadStoredAuth = async () => {
@@ -161,6 +192,8 @@ export function AuthProvider({ children }) {
         email: profileRes.data.email,
         profileImage: spotifyProfileImage,
         spotifyToken: accessToken,
+        spotifyRefreshToken: refreshToken,
+        expiresIn: expiresIn,
       });
       const { token: jwt, user: backendUser } = backendRes.data;
 

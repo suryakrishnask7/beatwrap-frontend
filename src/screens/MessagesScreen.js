@@ -483,6 +483,43 @@ export default function MessagesScreen() {
         </View>
       ) : (
         <ScrollView showsVerticalScrollIndicator={false}>
+          {/* ── NOTES SECTION ────────────────────────────────────────────────── */}
+          {friends.some(f => f.lastPlayedTrack) && (
+            <View style={styles.notesContainer}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.notesScroll}>
+                {friends.filter(f => f.lastPlayedTrack).map(friend => {
+                  const track = friend.lastPlayedTrack;
+                  return (
+                    <TouchableOpacity key={friend._id} style={styles.noteItem} onPress={() => openChatWith(friend)} activeOpacity={0.8}>
+                      <View style={styles.noteAvatarWrap}>
+                        {friend.profileImage ? (
+                          <Image source={{ uri: friend.profileImage }} style={styles.noteAvatar} />
+                        ) : (
+                          <View style={[styles.noteAvatar, styles.convoAvatarFallback]}>
+                            <Text style={styles.convoAvatarText}>{friend.displayName?.[0]}</Text>
+                          </View>
+                        )}
+                        <View style={styles.noteBubble}>
+                          {track.albumImg ? (
+                            <Image source={{ uri: track.albumImg }} style={styles.noteBubbleImg} />
+                          ) : (
+                            <Text style={styles.noteBubbleIcon}>🎵</Text>
+                          )}
+                          <View style={styles.noteBubbleTextWrap}>
+                            <Text style={styles.noteBubbleTrack} numberOfLines={1}>{track.name}</Text>
+                            <Text style={styles.noteBubbleArtist} numberOfLines={1}>{track.artist}</Text>
+                          </View>
+                        </View>
+                      </View>
+                      <Text style={styles.noteName} numberOfLines={1}>{friend.displayName}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* ── CHATS LIST ───────────────────────────────────────────────────── */}
           {friends.map(friend => {
             const convId = getConversationId(user._id, friend._id);
             const convo = messages[convId] || [];
@@ -524,6 +561,19 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '800', color: COLORS.text, letterSpacing: -0.5, flex: 1 },
   wsIndicator: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.border },
   wsIndicatorOn: { backgroundColor: '#22c55e' },
+
+  notesContainer: { paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.border },
+  notesScroll: { paddingHorizontal: SPACING.md, gap: 16 },
+  noteItem: { alignItems: 'center', width: 68 },
+  noteAvatarWrap: { position: 'relative', marginBottom: 6 },
+  noteAvatar: { width: 64, height: 64, borderRadius: 32 },
+  noteBubble: { position: 'absolute', top: -12, right: -24, backgroundColor: COLORS.bgElevated, borderRadius: 16, padding: 4, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border, maxWidth: 100, zIndex: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
+  noteBubbleImg: { width: 18, height: 18, borderRadius: 9, marginRight: 4 },
+  noteBubbleIcon: { fontSize: 12, marginRight: 4 },
+  noteBubbleTextWrap: { flex: 1 },
+  noteBubbleTrack: { fontSize: 10, fontWeight: '700', color: COLORS.text, flexShrink: 1 },
+  noteBubbleArtist: { fontSize: 9, color: COLORS.textMuted, flexShrink: 1 },
+  noteName: { fontSize: 11, color: COLORS.textMuted, textAlign: 'center', fontWeight: '500' },
 
   convoRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: SPACING.md, paddingVertical: 12, gap: 14 },
   convoAvatar: { width: 54, height: 54, borderRadius: 27 },

@@ -50,6 +50,10 @@ export const apiService = {
     const res = await api.get('/api/wrap/current', { params: { weekKey } });
     return res.data;
   },
+  exportPlaylist: async () => {
+    const res = await api.post('/api/wrap/export-playlist');
+    return res.data;
+  },
   saveWrapToCloud: async (weekKey, aiWrap, stats) => {
     const res = await api.post('/api/wrap/save', { weekKey, aiWrap, stats });
     return res.data;
@@ -83,8 +87,8 @@ export const apiService = {
   // Regenerate character — backend enforces 24h cooldown
   // Returns: { success, wrap } on success
   // Returns: { error: 'cooldown', message, hoursLeft } on 429
-  regenerateCharacter: async (weekKey) => {
-    const res = await api.post('/api/wrap/regenerate-wrap', { weekKey });
+  regenerateCharacter: async (weekKey, aiWrap) => {
+    const res = await api.post('/api/wrap/regenerate-wrap', { weekKey, aiWrap });
     return res.data;
   },
 
@@ -162,22 +166,8 @@ export const apiService = {
     return res.data;
   },
 
-  // NEW: incremental sync — routes to /sync (absolute) or /incremental ($inc)
-  incrementalListeningSync: async ({ weekKey, addMinutes, dailyMinutes, dailyTopTracks, trackPlayCounts, isFullSync }) => {
-    if (isFullSync) {
-      // Full sync: absolute set via /sync endpoint
-      const res = await api.post('/api/listening/sync', {
-        weekKey,
-        stats: { estimatedMinutes: addMinutes },
-      });
-      // Also push per-day data via incremental (sync doesn't store daily)
-      await api.post('/api/listening/incremental', {
-        weekKey, addMinutes: 0, // don't double-count minutes
-        dailyMinutes, dailyTopTracks, trackPlayCounts,
-      }).catch(() => {});
-      return res.data;
-    }
-    // Incremental: $inc on backend
+  // Incremental sync — always $inc on backend to accumulate
+  incrementalListeningSync: async ({ weekKey, addMinutes, dailyMinutes, dailyTopTracks, trackPlayCounts }) => {
     const res = await api.post('/api/listening/incremental', {
       weekKey, addMinutes, dailyMinutes, dailyTopTracks, trackPlayCounts,
     });

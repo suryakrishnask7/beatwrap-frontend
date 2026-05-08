@@ -12,7 +12,7 @@ import { groqService } from '../services/groqService';
 import { COLORS, FONTS, SPACING } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiService } from '../services/apiService';
-import { runFullSync, runIncrementalSync, startSyncScheduler, stopSyncScheduler } from '../services/listeningSync';
+// listeningSync removed — backend cron job handles all Spotify polling now
 import { notificationService } from '../services/notificationService';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 
@@ -87,6 +87,9 @@ export default function HomeScreen({ navigation }) {
   const [showAllTracks, setShowAllTracks] = useState(false);
   const [showAllArtists, setShowAllArtists] = useState(false);
   const [spotifyProfileImg, setSpotifyProfileImg] = useState(null);
+  const [playlistLoading, setPlaylistLoading] = useState(false);
+  const [playlistGenerated, setPlaylistGenerated] = useState(false);
+  const [playlistUrl, setPlaylistUrl] = useState(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const didLoad = useRef(false);
 
@@ -109,6 +112,21 @@ export default function HomeScreen({ navigation }) {
     }).start();
   };
 
+  const handleGeneratePlaylist = async () => {
+    try {
+      setPlaylistLoading(true);
+      const res = await apiService.exportPlaylist();
+      if (res.success) {
+        setPlaylistGenerated(true);
+        setPlaylistUrl(res.url);
+      }
+    } catch (e) {
+      alert("Failed to generate playlist. Ensure you've re-logged in to grant playlist permissions!");
+    } finally {
+      setPlaylistLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (authLoading) return;
     if (didLoad.current) return;
@@ -116,17 +134,12 @@ export default function HomeScreen({ navigation }) {
     loadData();
   }, [authLoading]);
 
-  // Start hourly sync scheduler when we have a Spotify token
+  // Schedule daily reminder notification (sync is now server-side)
   useEffect(() => {
     if (!spotifyToken || isGuest) return;
-    startSyncScheduler(spotifyToken);
-    
-    // Also schedule the daily reminder notification
     AsyncStorage.getItem('notifications_on').then(val => {
       if (val !== 'false' && user) notificationService.scheduleDailyReminder(user);
     });
-
-    return () => stopSyncScheduler();
   }, [spotifyToken]);
 
   // If user object has no profileImage (old accounts), fetch from Spotify in background
@@ -177,24 +190,43 @@ export default function HomeScreen({ navigation }) {
   const fetchStatsOnly = async () => {
     try {
       if (!spotifyToken) return;
-      // Run incremental sync (picks up new plays since last hour)
-      const syncData = await runIncrementalSync(spotifyToken).catch(() => null);
+      // Pull stats from backend (server cron keeps them fresh)
+      const weekKey = getCurrentWeekKey();
+      const history = await apiService.getListeningHistory(weekKey);
+      if (history?.found) {
+        // Use backend-tracked top tracks/artists (from actual play counts)
+        const hasBackendTracks = history.topTracksOfWeek?.length > 0;
+        const hasBackendArtists = history.topArtistsOfWeek?.length > 0;
 
-      const [tracks, artists, recent, accurateMinutes] = await Promise.all([
-        spotifyService.getTopTracks(spotifyToken, 'short_term', 20),
-        spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
-        spotifyService.getRecentlyPlayed(spotifyToken, 50),
-        spotifyService.getWeekMinutes(spotifyToken).catch(() => 0),
-      ]);
-      const computedStats = spotifyService.computeListeningStats(tracks, artists, recent);
-      computedStats.estimatedMinutes = accurateMinutes;
-      computedStats.topTracks  = tracks;
-      computedStats.topArtists = artists;
-      setStats(computedStats);
-      const cached = await AsyncStorage.getItem('weekly_wrap');
-      if (cached) {
-        const data = JSON.parse(cached);
-        await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...data, stats: computedStats }));
+        const backendStats = {
+          ...history.stats,
+          estimatedMinutes: history.stats?.estimatedMinutes || 0,
+          // Map topTracksOfWeek to the format HomeScreen expects
+          topTracks: hasBackendTracks
+            ? history.topTracksOfWeek.map(t => ({
+                id: t.trackId, name: t.name,
+                artists: [{ name: t.artist }],
+                album: { images: t.albumImg ? [{ url: t.albumImg }] : [] },
+                duration_ms: t.durationMs || 0,
+                _plays: t.plays,
+              }))
+            : stats?.topTracks || [],
+          topArtists: hasBackendArtists
+            ? history.topArtistsOfWeek.map(a => ({
+                id: a.artistId, name: a.name,
+                images: a.image ? [{ url: a.image }] : [],
+                genres: a.genres || [],
+                _plays: a.plays,
+              }))
+            : stats?.topArtists || [],
+          topGenres: history.topGenres || [],
+        };
+        setStats(backendStats);
+        const cached = await AsyncStorage.getItem('weekly_wrap');
+        if (cached) {
+          const data = JSON.parse(cached);
+          await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...data, stats: backendStats }));
+        }
       }
     } catch (e) { console.error('Stats refresh error:', e); }
   };
@@ -203,38 +235,61 @@ export default function HomeScreen({ navigation }) {
     try {
       if (!spotifyToken) { setWrap(GUEST_WRAP); setStats(GUEST_STATS); return; }
       const currentWeekKey = getCurrentWeekKey();
+
+      // 1. Check if we already have a wrap saved in the cloud
       try {
         const cloudData = await apiService.getWrapFromCloud(currentWeekKey);
         if (cloudData.found) {
           setWrap(cloudData.wrap); setStats(cloudData.stats);
           await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ wrap: cloudData.wrap, stats: cloudData.stats, weekKey: currentWeekKey }));
-          // Background: full sync updates per-day data + accurate minutes in DB
-          runFullSync(spotifyToken).then(async (syncData) => {
-            if (!syncData) return;
-            const stored = await AsyncStorage.getItem('weekly_wrap');
-            if (stored) {
-              const d = JSON.parse(stored);
-              const updatedStats = { ...d.stats, estimatedMinutes: syncData.totalMinutes };
-              setStats(updatedStats);
-              await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...d, stats: updatedStats }));
-            }
-          }).catch(() => {});
+          // Refresh stats from backend in the background (cron may have updated)
+          fetchStatsOnly();
           return;
         }
       } catch {}
 
-      // No cloud wrap — run full sync (accurate minutes + per-day data) + top tracks/artists in parallel
-      const [tracks, artists, recent, syncData] = await Promise.all([
-        spotifyService.getTopTracks(spotifyToken, 'short_term', 20),
-        spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
-        spotifyService.getRecentlyPlayed(spotifyToken, 50),
-        runFullSync(spotifyToken).catch(() => null),
-      ]);
-      const computedStats = spotifyService.computeListeningStats(tracks, artists, recent);
-      computedStats.estimatedMinutes = syncData?.totalMinutes || 0;
-      computedStats.topTracks  = tracks;
-      computedStats.topArtists = artists;
-      await AsyncStorage.setItem('my_top_tracks', JSON.stringify(tracks));
+      // 2. No wrap yet — fetch backend listening history
+      const history = await apiService.getListeningHistory(currentWeekKey).catch(() => null);
+      const hasBackendData = history?.found && history.topTracksOfWeek?.length > 0;
+
+      let computedStats;
+
+      if (hasBackendData) {
+        // ── USE BACKEND DATA (accurate, from cron) ────────────────────────
+        computedStats = {
+          ...history.stats,
+          estimatedMinutes: history.stats?.estimatedMinutes || 0,
+          topTracks: history.topTracksOfWeek.map(t => ({
+            id: t.trackId, name: t.name,
+            artists: [{ name: t.artist }],
+            album: { images: t.albumImg ? [{ url: t.albumImg }] : [] },
+            duration_ms: t.durationMs || 0,
+            _plays: t.plays,
+          })),
+          topArtists: (history.topArtistsOfWeek || []).map(a => ({
+            id: a.artistId, name: a.name,
+            images: a.image ? [{ url: a.image }] : [],
+            genres: a.genres || [],
+            _plays: a.plays,
+          })),
+          topGenres: history.topGenres || [],
+        };
+      } else {
+        // ── FALLBACK: Spotify API for brand-new users with no cron data yet ─
+        const [tracks, artists] = await Promise.all([
+          spotifyService.getTopTracks(spotifyToken, 'short_term', 20),
+          spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
+        ]);
+        computedStats = spotifyService.computeListeningStats(tracks, artists, []);
+        computedStats.estimatedMinutes = history?.stats?.estimatedMinutes || 0;
+        computedStats.topTracks = tracks;
+        computedStats.topArtists = artists;
+        computedStats.topGenres = history?.topGenres || computedStats.topGenres || [];
+      }
+
+      await AsyncStorage.setItem('my_top_tracks', JSON.stringify(computedStats.topTracks));
+
+      // Build mood logs for AI prompt
       const storedMoods = await AsyncStorage.getItem('mood_logs');
       const moodLogsRaw = storedMoods ? JSON.parse(storedMoods) : {};
       const DAYS_LIST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -243,9 +298,11 @@ export default function HomeScreen({ navigation }) {
       else if (moodLogsRaw && typeof moodLogsRaw === 'object') {
         moods = Object.entries(moodLogsRaw).map(([idx, log]) => log ? ({ day: DAYS_LIST[parseInt(idx)] || idx, ...log }) : null).filter(Boolean);
       }
+
       const aiWrap = await groqService.generateWeeklyWrap(computedStats, moods);
       setStats(computedStats); setWrap(aiWrap);
       await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ wrap: aiWrap, stats: computedStats, weekKey: currentWeekKey }));
+
       try {
         const saved = await apiService.saveWrapToCloud(currentWeekKey, aiWrap, computedStats);
         if (saved.saved === false && saved.wrap) {
@@ -264,8 +321,19 @@ export default function HomeScreen({ navigation }) {
     if (!wrap || isGuest) return;
     setRegenLoading(true);
     try {
-      const result = await apiService.regenerateCharacter(getCurrentWeekKey());
-      const updatedWrap = { ...wrap, tamil_character: result.tamil_character, tamil_protagonist: result.tamil_protagonist };
+      const storedMoods = await AsyncStorage.getItem('mood_logs');
+      const moodLogsRaw = storedMoods ? JSON.parse(storedMoods) : {};
+      const DAYS_LIST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      let moods = [];
+      if (Array.isArray(moodLogsRaw)) moods = moodLogsRaw.filter(Boolean);
+      else if (moodLogsRaw && typeof moodLogsRaw === 'object') {
+        moods = Object.entries(moodLogsRaw).map(([idx, log]) => log ? ({ day: DAYS_LIST[parseInt(idx)] || idx, ...log }) : null).filter(Boolean);
+      }
+      
+      const newAiWrap = await groqService.generateWeeklyWrap(stats, moods, wrap.tamil_character?.name);
+      
+      const result = await apiService.regenerateCharacter(getCurrentWeekKey(), newAiWrap);
+      const updatedWrap = { ...wrap, ...result.wrap };
       setWrap(updatedWrap);
       const cached = await AsyncStorage.getItem('weekly_wrap');
       if (cached) {
@@ -405,6 +473,29 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.vibeText}>{wrap.dominant_vibe}</Text>
               </View>
             )}
+            
+            {/* Generate Playlist Button */}
+            {!isGuest && (
+              <TouchableOpacity 
+                style={[styles.playlistBtn, playlistGenerated && styles.playlistBtnSuccess]} 
+                onPress={playlistGenerated ? () => Linking.openURL(playlistUrl) : handleGeneratePlaylist}
+                disabled={playlistLoading}
+              >
+                <LinearGradient 
+                  colors={playlistGenerated ? ['#1DB954', '#1AA34A'] : ['#1DB954', '#109943']} 
+                  style={styles.playlistBtnGrad}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                >
+                  {playlistLoading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : playlistGenerated ? (
+                    <Text style={styles.playlistBtnText}>✓ Open Playlist</Text>
+                  ) : (
+                    <Text style={styles.playlistBtnText}>🎵 Generate Playlist</Text>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -528,6 +619,7 @@ export default function HomeScreen({ navigation }) {
 
 function TrackRow({ track, rank }) {
   const imageUrl = track.album?.images?.[2]?.url || track.album?.images?.[0]?.url;
+  const hasPlays = track._plays && track._plays > 0;
   const mins = Math.floor((track.duration_ms || 0) / 60000);
   const secs = String(Math.floor(((track.duration_ms || 0) % 60000) / 1000)).padStart(2, '0');
 
@@ -542,7 +634,10 @@ function TrackRow({ track, rank }) {
         <Text style={styles.trackName} numberOfLines={1}>{track.name}</Text>
         <Text style={styles.trackArtist} numberOfLines={1}>{track.artists?.[0]?.name}</Text>
       </View>
-      <Text style={styles.trackDur}>{mins}:{secs}</Text>
+      {hasPlays
+        ? <Text style={[styles.trackDur, { color: '#FF3366' }]}>{track._plays}×</Text>
+        : <Text style={styles.trackDur}>{mins}:{secs}</Text>
+      }
     </View>
   );
 }
@@ -678,6 +773,10 @@ const styles = StyleSheet.create({
   storyText: { fontSize: 13, color: '#9090B0', lineHeight: 22 },
   vibePill: { marginTop: 12, alignSelf: 'flex-start', backgroundColor: '#FF336611', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: '#FF336633' },
   vibeText: { color: '#FF3366', fontSize: 11, fontWeight: '600' },
+  playlistBtn: { marginTop: 16, borderRadius: 12, overflow: 'hidden', transform: [{ scale: 1 }] },
+  playlistBtnSuccess: { opacity: 0.9 },
+  playlistBtnGrad: { paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
+  playlistBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700', letterSpacing: 0.5 },
 
   // Modals
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.75)' },

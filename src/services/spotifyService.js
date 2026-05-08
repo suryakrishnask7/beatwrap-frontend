@@ -2,9 +2,53 @@ import axios from 'axios';
 
 const SPOTIFY_BASE = 'https://api.spotify.com/v1';
 
+const spotifyApi = axios.create({
+  baseURL: SPOTIFY_BASE,
+});
+
+let isRateLimited = false;
+let requestQueue = [];
+
+spotifyApi.interceptors.request.use(async (config) => {
+  if (isRateLimited) {
+    await new Promise(resolve => requestQueue.push(resolve));
+  }
+  return config;
+});
+
+spotifyApi.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response && error.response.status === 429 && !originalRequest._isRetry) {
+      originalRequest._isRetry = true;
+      
+      if (!isRateLimited) {
+        isRateLimited = true;
+        const retryAfter = error.response.headers['retry-after'] 
+          ? parseInt(error.response.headers['retry-after'], 10) * 1000 
+          : 5000; // default 5 seconds if header missing
+        
+        console.warn(`[Spotify API] 429 Rate Limit. Pausing all requests for ${retryAfter}ms`);
+        setTimeout(() => {
+          isRateLimited = false;
+          requestQueue.forEach(resolve => resolve());
+          requestQueue = [];
+        }, retryAfter);
+      }
+      
+      // Wait in the queue to retry the failed request
+      return new Promise((resolve) => {
+        requestQueue.push(() => resolve(spotifyApi(originalRequest)));
+      });
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const spotifyService = {
   async getTopTracks(token, timeRange = 'short_term', limit = 20) {
-    const res = await axios.get(`${SPOTIFY_BASE}/me/top/tracks`, {
+    const res = await spotifyApi.get('/me/top/tracks', {
       headers: { Authorization: `Bearer ${token}` },
       params: { time_range: timeRange, limit },
     });
@@ -12,7 +56,7 @@ export const spotifyService = {
   },
 
   async getTopArtists(token, timeRange = 'short_term', limit = 20) {
-    const res = await axios.get(`${SPOTIFY_BASE}/me/top/artists`, {
+    const res = await spotifyApi.get('/me/top/artists', {
       headers: { Authorization: `Bearer ${token}` },
       params: { time_range: timeRange, limit },
     });
@@ -20,7 +64,7 @@ export const spotifyService = {
   },
 
   async getRecentlyPlayed(token, limit = 50) {
-    const res = await axios.get(`${SPOTIFY_BASE}/me/player/recently-played`, {
+    const res = await spotifyApi.get('/me/player/recently-played', {
       headers: { Authorization: `Bearer ${token}` },
       params: { limit },
     });
@@ -29,7 +73,7 @@ export const spotifyService = {
 
   async getCurrentlyPlaying(token) {
     try {
-      const res = await axios.get(`${SPOTIFY_BASE}/me/player/currently-playing`, {
+      const res = await spotifyApi.get('/me/player/currently-playing', {
         headers: { Authorization: `Bearer ${token}` },
       });
       return res.data;
@@ -124,7 +168,7 @@ export const spotifyService = {
           break;
         }
 
-        const res = await axios.get(`${SPOTIFY_BASE}/me/player/recently-played`, {
+        const res = await spotifyApi.get('/me/player/recently-played', {
           headers: { Authorization: `Bearer ${token}` },
           params,
         });
@@ -168,7 +212,7 @@ export const spotifyService = {
         const params = { limit: 50 };
         if (cursor) params.before = cursor;
 
-        const res = await axios.get(`${SPOTIFY_BASE}/me/player/recently-played`, {
+        const res = await spotifyApi.get('/me/player/recently-played', {
           headers: { Authorization: `Bearer ${token}` },
           params,
         });

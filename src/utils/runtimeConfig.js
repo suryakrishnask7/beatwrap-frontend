@@ -14,7 +14,7 @@ export const getRuntimeConfig = () => ({
   BACKEND_URL:
     runtimeExtra.BACKEND_URL ||
     process.env.EXPO_PUBLIC_BACKEND_URL ||
-    'https://beatwrap-backend.onrender.com',
+    'http://10.91.128.39:5000',
   GROQ_API_KEY:
     runtimeExtra.GROQ_API_KEY ||
     process.env.EXPO_PUBLIC_GROQ_API_KEY ||

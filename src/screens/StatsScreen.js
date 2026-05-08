@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Dimensions, Animated, TouchableOpacity,
+  View, Text, ScrollView, StyleSheet, Dimensions, Animated, TouchableOpacity, TextInput
 } from 'react-native';
+import Reanimated, { useSharedValue, useAnimatedProps, withTiming, runOnJS } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Circle, Defs, LinearGradient as SvgGrad, Stop } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -33,23 +34,35 @@ function getLastWeekKey() {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
+const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
+const AnimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
+
 function ArcProgress({ value = 0, max = 100, color = '#FF3366', size = 100, label = '', delta = null }) {
-  const animVal = useRef(new Animated.Value(0)).current;
-  const [displayVal, setDisplayVal] = useState(0);
+  const progress = useSharedValue(0);
 
   useEffect(() => {
-    Animated.timing(animVal, { toValue: value, duration: 1000, useNativeDriver: false }).start();
-    animVal.addListener(({ value: v }) => setDisplayVal(Math.round(v)));
-    return () => animVal.removeAllListeners();
+    progress.value = withTiming(value, { duration: 1000 });
   }, [value]);
 
   const radius = (size - 16) / 2;
   const circumference = 2 * Math.PI * radius;
-  const progress = Math.min(value / max, 1);
-  const strokeDash = circumference * progress;
   const cx = size / 2;
   const cy = size / 2;
   const deltaColor = delta > 0 ? '#10B981' : delta < 0 ? '#FF3366' : '#9090B0';
+
+  const animatedCircleProps = useAnimatedProps(() => {
+    const p = Math.min(progress.value / max, 1);
+    const strokeDash = circumference * p;
+    return {
+      strokeDasharray: `${strokeDash} ${circumference}`
+    };
+  });
+
+  const animatedTextProps = useAnimatedProps(() => {
+    return {
+      text: `${Math.round(progress.value)}%`,
+    };
+  });
 
   return (
     <View style={{ alignItems: 'center' }}>
@@ -57,13 +70,18 @@ function ArcProgress({ value = 0, max = 100, color = '#FF3366', size = 100, labe
         <LinearGradient colors={[color + '22', color + '11']} style={{ position: 'absolute', width: size, height: size, borderRadius: size / 2 }} />
         <Svg width={size} height={size} style={{ position: 'absolute' }}>
           <Circle cx={cx} cy={cy} r={radius} stroke={color + '22'} strokeWidth={8} fill="none" />
-          <Circle cx={cx} cy={cy} r={radius} stroke={color} strokeWidth={8} fill="none"
-            strokeDasharray={`${strokeDash} ${circumference}`}
+          <AnimatedCircle 
+            cx={cx} cy={cy} r={radius} stroke={color} strokeWidth={8} fill="none"
             strokeLinecap="round" rotation="-90" origin={`${cx}, ${cy}`}
+            animatedProps={animatedCircleProps}
           />
         </Svg>
         <View style={{ alignItems: 'center' }}>
-          <Text style={{ fontSize: 18, fontWeight: '900', color, letterSpacing: -0.5 }}>{displayVal}%</Text>
+          <AnimatedTextInput 
+            editable={false}
+            animatedProps={animatedTextProps}
+            style={{ fontSize: 18, fontWeight: '900', color, letterSpacing: -0.5, textAlign: 'center', padding: 0 }}
+          />
           {delta !== null && (
             <Text style={{ fontSize: 10, color: deltaColor, fontWeight: '700' }}>{delta > 0 ? '+' : ''}{delta}</Text>
           )}

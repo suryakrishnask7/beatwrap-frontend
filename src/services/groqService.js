@@ -361,8 +361,8 @@ FINAL OUTPUT FORMAT (JSON ONLY — NO EXTRA TEXT)
 
 
 export const groqService = {
-  async generateWeeklyWrap(listeningData, moodLogs) {
-    const userPrompt = `Here is my listening data for this week:
+  async generateWeeklyWrap(listeningData, moodLogs, previousCharacterName = null) {
+    let userPrompt = `Here is my listening data for this week:
 
 Top Genres: ${listeningData.topGenres?.map(g => g.genre).join(', ') || 'Mixed'}
 Top Artists: ${listeningData.topArtists?.slice(0, 8).map(a => a.name).join(', ') || 'Various'}
@@ -373,6 +373,10 @@ ${moodLogs?.map(m => `${m.day}: ${m.emoji} ${m.label}${m.note ? ` - "${m.note}"`
 
 Based on the actual artists and tracks above, pick the Tamil character whose music world most closely matches what I listened to. Then write my weekly story.`;
 
+    if (previousCharacterName) {
+      userPrompt += `\n\nIMPORTANT: I am regenerating my wrap. The previous character you gave me was "${previousCharacterName}". You MUST pick a DIFFERENT character and write a completely new story. Give me a fresh perspective.`;
+    }
+
     try {
       const res = await axios.post(
         `${GROQ_BASE}/chat/completions`,
@@ -382,6 +386,7 @@ Based on the actual artists and tracks above, pick the Tamil character whose mus
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
           ],
+          response_format: { type: "json_object" },
           max_tokens: 900,
           temperature: 0.85,
         },
@@ -428,49 +433,6 @@ Based on the actual artists and tracks above, pick the Tamil character whose mus
     }
   },
 
-  async generateCompatibility(user1Data, user2Data) {
-    const prompt = `Compare these two music listener profiles and generate a compatibility score.
-
-User 1: Top genres: ${user1Data.topGenres?.join(', ')}, Exploration: ${user1Data.explorationIndex}/100, Character: ${user1Data.tamilCharacter}
-User 2: Top genres: ${user2Data.topGenres?.join(', ')}, Exploration: ${user2Data.explorationIndex}/100, Character: ${user2Data.tamilCharacter}
-
-Return ONLY valid JSON:
-{
-  "score": <0-100>,
-  "vibe_description": "<short cinematic description>",
-  "shared_traits": ["<trait1>", "<trait2>", "<trait3>"],
-  "chemistry": "<one line>"
-}`;
-
-    try {
-      const res = await axios.post(
-        `${GROQ_BASE}/chat/completions`,
-        {
-          model: 'llama-3.3-70b-versatile',
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 300,
-          temperature: 0.7,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${GROQ_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      const content = res.data.choices[0].message.content;
-      const clean = content.replace(/```json|```/g, '').trim();
-      return JSON.parse(clean);
-    } catch (e) {
-      return {
-        score: 74,
-        vibe_description: 'Two frequencies that find harmony in unexpected moments.',
-        shared_traits: ['Late night energy', 'Eclectic taste', 'Mood-led listening'],
-        chemistry: 'Different wavelengths, same frequency.',
-      };
-    }
-  },
 
   async generateDailyNotifications(userName) {
     const name = userName ? userName.split(' ')[0] : 'Listener';
