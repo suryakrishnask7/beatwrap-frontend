@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Animated, RefreshControl, ActivityIndicator, Dimensions,
-  Image, Alert, Pressable, Modal,
+  Image, Alert, Pressable, Modal, Linking,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as SecureStore from 'expo-secure-store';
@@ -168,12 +168,13 @@ export default function HomeScreen({ navigation }) {
       const cached = await AsyncStorage.getItem('weekly_wrap');
       if (cached) {
         const data = JSON.parse(cached);
-        if (data.weekKey === getCurrentWeekKey()) {
+        // Force refresh if the cached data is missing 'story' (e.g. from an old broken AI generation)
+        if (data.weekKey === getCurrentWeekKey() && data.wrap?.story) {
           setWrap(data.wrap);
           setStats(data.stats);
           fetchStatsOnly();
           return;
-        } else {
+        } else if (data.weekKey !== getCurrentWeekKey()) {
           await AsyncStorage.setItem('prev_weekly_wrap', cached);
         }
       }
