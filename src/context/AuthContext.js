@@ -47,6 +47,7 @@ export function AuthProvider({ children }) {
       scopes: ['user-top-read', 'user-read-recently-played', 'user-read-currently-playing', 'user-read-private', 'user-read-email', 'playlist-modify-public'],
       usePKCE: true,
       redirectUri: REDIRECT_URI,
+      extraParams: { show_dialog: 'true' },
     },
     discovery
   );
