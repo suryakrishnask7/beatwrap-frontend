@@ -44,7 +44,7 @@ export function AuthProvider({ children }) {
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
       clientId: SPOTIFY_CLIENT_ID,
-      scopes: ['user-top-read', 'user-read-recently-played', 'user-read-currently-playing', 'user-read-private', 'user-read-email', 'playlist-modify-public'],
+      scopes: ['user-top-read', 'user-read-recently-played', 'user-read-currently-playing', 'user-read-private', 'user-read-email', 'playlist-modify-private'],
       usePKCE: true,
       redirectUri: REDIRECT_URI,
       extraParams: { show_dialog: 'true' },
