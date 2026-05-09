@@ -118,35 +118,34 @@ export default function MoodScreen() {
     if (Date.now() - lastFetch < 30 * 60 * 1000 && cached) return;
 
     try {
-      const recent = await spotifyService.getRecentlyPlayed(spotifyToken, 50);
+      const historyRes = await apiService.getListeningHistory(getCurrentWeekKey());
       const existingRaw = await AsyncStorage.getItem('daily_music');
       const byDay = existingRaw ? { ...JSON.parse(existingRaw) } : {};
-      recent.forEach(item => {
-        const playedAt = new Date(item.played_at);
-        const now = new Date();
-        const monday = new Date(now);
-        monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-        monday.setHours(0, 0, 0, 0);
-        if (playedAt < monday) return;
-        const dayOfWeek = playedAt.getDay();
-        const dayIdx = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        if (!byDay[dayIdx]) byDay[dayIdx] = { tracks: [], artistMap: {} };
-        if (byDay[dayIdx].tracks.length < 5) {
-          if (!byDay[dayIdx].tracks.find(t => t.id === item.track.id))
-            byDay[dayIdx].tracks.push(item.track);
-        }
-        item.track.artists?.forEach(a => { byDay[dayIdx].artistMap[a.id] = a.name; });
-      });
-      Object.keys(byDay).forEach(day => {
-        if (byDay[day].artistMap) {
-          byDay[day].artists = Object.values(byDay[day].artistMap).slice(0, 4);
-          delete byDay[day].artistMap;
-        }
-      });
+      
+      if (historyRes && historyRes.found && historyRes.dailyTopTracks) {
+        Object.entries(historyRes.dailyTopTracks).forEach(([dateStr, tracks]) => {
+          const d = new Date(dateStr);
+          const dayOfWeek = d.getDay();
+          const dayIdx = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+          
+          if (!byDay[dayIdx]) byDay[dayIdx] = { tracks: [], artists: [] };
+          
+          byDay[dayIdx].tracks = tracks.slice(0, 5).map(t => ({
+            id: t.trackId,
+            name: t.name,
+            artists: [{ name: t.artist }]
+          }));
+          
+          byDay[dayIdx].artists = Array.from(new Set(tracks.map(t => t.artist))).slice(0, 4);
+        });
+      }
+      
       setDailyMusic(byDay);
       await AsyncStorage.setItem('daily_music', JSON.stringify(byDay));
       await AsyncStorage.setItem('daily_music_last_fetch', String(Date.now()));
-    } catch {}
+    } catch (e) {
+      console.error("Failed to load daily music from history:", e);
+    }
   };
 
   const saveMood = async () => {
