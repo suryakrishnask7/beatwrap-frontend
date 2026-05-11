@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Alert, Linking, Switch, Image, ActivityIndicator,
+  Alert, Linking, Switch, Image, ActivityIndicator, RefreshControl
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../context/AuthContext';
@@ -37,7 +37,7 @@ export default function ProfileScreen() {
   };
 
   const loadStats = async () => {
-    try { const cached = await AsyncStorage.getItem('profile_stats'); if (cached) setStats(JSON.parse(cached)); } catch {}
+    try { const cached = await AsyncStorage.getItem('profile_stats'); if (cached) { try { setStats(JSON.parse(cached)); } catch { await AsyncStorage.removeItem('profile_stats'); } } } catch {}
     if (!user?._id || user.isGuest) { setLoadingStats(false); return; }
     try {
       const res = await apiService.getProfileStats();
@@ -51,8 +51,8 @@ export default function ProfileScreen() {
         const friendsRaw = await AsyncStorage.getItem('friends_list');
         setStats({
           wraps: wrapRaw ? 1 : 0,
-          moodDays: moodRaw ? Object.keys(JSON.parse(moodRaw)).length : 0,
-          friends: friendsRaw ? JSON.parse(friendsRaw).length : 0,
+          moodDays: moodRaw ? (() => { try { return Object.keys(JSON.parse(moodRaw)).length; } catch { return 0; } })() : 0,
+          friends: friendsRaw ? (() => { try { return JSON.parse(friendsRaw).length; } catch { return 0; } })() : 0,
         });
       } catch {}
     } finally { setLoadingStats(false); }
@@ -61,7 +61,11 @@ export default function ProfileScreen() {
   const loadCurrentWrap = async () => {
     try {
       const cached = await AsyncStorage.getItem('weekly_wrap');
-      if (cached) { const { wrap } = JSON.parse(cached); setCurrentWrap(wrap); }
+      if (cached) {
+        let parsed = null;
+        try { parsed = JSON.parse(cached); } catch { await AsyncStorage.removeItem('weekly_wrap'); }
+        if (parsed?.wrap) setCurrentWrap(parsed.wrap);
+      }
     } catch {}
   };
 
@@ -109,16 +113,28 @@ export default function ProfileScreen() {
     {
       title: 'SUPPORT',
       items: [
-        { icon: '💬', label: 'Send Feedback', onPress: () => Linking.openURL('mailto:feedback@beatwrap.app?subject=BeatWrap Feedback'), chevron: true },
-        { icon: '⭐', label: 'Rate BeatWrap!', onPress: () => Linking.openURL('https://play.google.com/store'), chevron: true },
-        { icon: '🔔', label: 'Test AI Notification', onPress: () => notificationService.testNotification(user), chevron: true },
+        { icon: '🔔', label: 'Send AI Notification', onPress: () => notificationService.testNotification(user), chevron: true },
       ],
     },
   ];
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        contentContainerStyle={styles.scroll} 
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={loadingStats}
+            onRefresh={() => {
+              loadStats();
+              loadCurrentWrap();
+            }}
+            tintColor={COLORS.accent}
+            colors={[COLORS.accent]}
+          />
+        }
+      >
 
         {/* ── Hero ── */}
         <View style={styles.heroWrap}>
@@ -126,12 +142,9 @@ export default function ProfileScreen() {
           <View style={[styles.orb, { backgroundColor: '#FF336644', top: -30, right: -20, width: 160, height: 160 }]} />
           <View style={[styles.orb, { backgroundColor: '#8B5CF644', bottom: 0, left: -40, width: 200, height: 200 }]} />
           <LinearGradient colors={['#1A0A2E', '#0A0A0F']} style={styles.heroGrad}>
-            {/* Settings icon top right */}
+            {/* Settings icon top right removed */}
             <View style={styles.heroTopRow}>
               <View style={{ flex: 1 }} />
-              <TouchableOpacity style={styles.settingsIconBtn}>
-                <Text style={styles.settingsIcon}>⚙</Text>
-              </TouchableOpacity>
             </View>
 
             {/* Avatar */}
@@ -142,10 +155,7 @@ export default function ProfileScreen() {
                     <Text style={styles.avatarInitials}>{initials}</Text>
                   </LinearGradient>
               }
-              {/* Edit pencil — no play button */}
-              <View style={styles.avatarEditDot}>
-                <Text style={{ fontSize: 10, color: '#0A0A0F' }}>✎</Text>
-              </View>
+              {/* Edit pencil removed */}
             </View>
 
             <Text style={styles.userName}>{user?.displayName || 'Listener'}</Text>

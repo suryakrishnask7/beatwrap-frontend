@@ -27,6 +27,16 @@ const getCurrentWeekKey = () => {
   return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
 };
 
+const getLastWeekKey = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+  const week1 = new Date(d.getFullYear(), 0, 4);
+  const weekNum = 1 + Math.round(((d - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+  return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+};
+
 const GUEST_WRAP = {
   week_label: 'The Phantom Listener',
   dominant_vibe: 'Late Night Cinematic',
@@ -80,6 +90,7 @@ export default function HomeScreen({ navigation }) {
   const { user, spotifyToken, signOut, loading: authLoading } = useAuth();
   const [wrap, setWrap] = useState(null);
   const [stats, setStats] = useState(null);
+  const [recentTracks, setRecentTracks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [regenLoading, setRegenLoading] = useState(false);
@@ -138,8 +149,10 @@ export default function HomeScreen({ navigation }) {
   useEffect(() => {
     if (!spotifyToken || isGuest) return;
     AsyncStorage.getItem('notifications_on').then(val => {
-      if (val !== 'false' && user) notificationService.scheduleDailyReminder(user);
-    });
+      if (val !== 'false' && user) {
+        notificationService.scheduleDailyReminder(user).catch(e => console.error('[Notifications] Schedule failed:', e));
+      }
+    }).catch(e => console.error('[Notifications] Settings check failed:', e));
   }, [spotifyToken]);
 
   // If user object has no profileImage (old accounts), fetch from Spotify in background
@@ -167,7 +180,15 @@ export default function HomeScreen({ navigation }) {
       }
       const cached = await AsyncStorage.getItem('weekly_wrap');
       if (cached) {
-        const data = JSON.parse(cached);
+        let data = null;
+        try {
+          data = JSON.parse(cached);
+        } catch (e) {
+          console.error('Error parsing weekly_wrap:', e);
+          await AsyncStorage.removeItem('weekly_wrap'); // Clear corrupt data
+        }
+        
+        if (!data) return; // Safety check
         // Force refresh if the cached data is missing 'story' (e.g. from an old broken AI generation)
         if (data.weekKey === getCurrentWeekKey() && data.wrap?.story) {
           setWrap(data.wrap);
@@ -194,40 +215,57 @@ export default function HomeScreen({ navigation }) {
       // Pull stats from backend (server cron keeps them fresh)
       const weekKey = getCurrentWeekKey();
       const history = await apiService.getListeningHistory(weekKey);
-      if (history?.found) {
-        // Use backend-tracked top tracks/artists (from actual play counts)
-        const hasBackendTracks = history.topTracksOfWeek?.length > 0;
-        const hasBackendArtists = history.topArtistsOfWeek?.length > 0;
+      const spotifyRecent = await spotifyService.getRecentlyPlayed(spotifyToken, 20);
+      
+      const recentTracksMapped = [];
+      const seenIds = new Set();
+      for (const item of (spotifyRecent || [])) {
+        if (!seenIds.has(item.track.id)) {
+          seenIds.add(item.track.id);
+          recentTracksMapped.push({
+            trackId: item.track.id,
+            name: item.track.name,
+            artist: item.track.artists?.[0]?.name || 'Unknown',
+            albumImg: item.track.album?.images?.[1]?.url || item.track.album?.images?.[0]?.url,
+            playedAt: item.played_at,
+            durationMs: item.track.duration_ms
+          });
+        }
+      }
 
+      if (history?.found) {
         const backendStats = {
           ...history.stats,
           estimatedMinutes: history.stats?.estimatedMinutes || 0,
-          // Map topTracksOfWeek to the format HomeScreen expects
-          topTracks: hasBackendTracks
-            ? history.topTracksOfWeek.map(t => ({
-                id: t.trackId, name: t.name,
-                artists: [{ name: t.artist }],
-                album: { images: t.albumImg ? [{ url: t.albumImg }] : [] },
-                duration_ms: t.durationMs || 0,
-                _plays: t.plays,
-              }))
-            : stats?.topTracks || [],
-          topArtists: hasBackendArtists
-            ? history.topArtistsOfWeek.map(a => ({
-                id: a.artistId, name: a.name,
-                images: a.image ? [{ url: a.image }] : [],
-                genres: a.genres || [],
-                _plays: a.plays,
-              }))
-            : stats?.topArtists || [],
+          topTracks: (history.topTracksOfWeek || []).map(t => ({
+            id: t.trackId, name: t.name,
+            artists: [{ name: t.artist }],
+            album: { images: t.albumImg ? [{ url: t.albumImg }] : [] },
+            duration_ms: t.durationMs || 0,
+            _plays: t.plays,
+            external_urls: { spotify: t.spotifyUrl },
+            uri: t.uri,
+          })),
+          topArtists: (history.topArtistsOfWeek || []).map(a => ({
+            id: a.artistId, name: a.name,
+            images: a.image ? [{ url: a.image }] : [],
+            genres: a.genres || [],
+            _plays: a.plays,
+          })),
           topGenres: history.topGenres || [],
         };
         setStats(backendStats);
+        setRecentTracks(recentTracksMapped);
         const cached = await AsyncStorage.getItem('weekly_wrap');
         if (cached) {
-          const data = JSON.parse(cached);
-          await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...data, stats: backendStats }));
+          let data = null;
+          try { data = JSON.parse(cached); } catch { await AsyncStorage.removeItem('weekly_wrap'); }
+          if (data) {
+            await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...data, stats: backendStats }));
+          }
         }
+      } else {
+        setRecentTracks(recentTracksMapped);
       }
     } catch (e) { console.error('Stats refresh error:', e); }
   };
@@ -277,22 +315,42 @@ export default function HomeScreen({ navigation }) {
         };
       } else {
         // ── FALLBACK: Spotify API for brand-new users with no cron data yet ─
-        const [tracks, artists] = await Promise.all([
-          spotifyService.getTopTracks(spotifyToken, 'short_term', 20),
-          spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
-        ]);
-        computedStats = spotifyService.computeListeningStats(tracks, artists, []);
-        computedStats.estimatedMinutes = history?.stats?.estimatedMinutes || 0;
-        computedStats.topTracks = tracks;
-        computedStats.topArtists = artists;
-        computedStats.topGenres = history?.topGenres || computedStats.topGenres || [];
+        const [tracks, artists, recent] = await Promise.all([
+        spotifyService.getTopTracks(spotifyToken, 'short_term', 20),
+        spotifyService.getTopArtists(spotifyToken, 'short_term', 20),
+        spotifyService.getRecentlyPlayed(spotifyToken, 20)
+      ]);
+      computedStats = spotifyService.computeListeningStats(tracks, artists, []);
+      computedStats.estimatedMinutes = history?.stats?.estimatedMinutes || 0;
+      computedStats.topTracks = tracks;
+      computedStats.topArtists = artists;
+      computedStats.topGenres = history?.topGenres || computedStats.topGenres || [];
+      
+      const recentTracksMapped = [];
+      const seenIds = new Set();
+      for (const item of (recent || [])) {
+        if (!seenIds.has(item.track.id)) {
+          seenIds.add(item.track.id);
+          recentTracksMapped.push({
+            trackId: item.track.id,
+            name: item.track.name,
+            artist: item.track.artists?.[0]?.name || 'Unknown',
+            albumImg: item.track.album?.images?.[1]?.url || item.track.album?.images?.[0]?.url,
+            playedAt: item.played_at,
+            durationMs: item.track.duration_ms
+          });
+        }
       }
-
-      await AsyncStorage.setItem('my_top_tracks', JSON.stringify(computedStats.topTracks));
+      setRecentTracks(recentTracksMapped);
+    }
+    await AsyncStorage.setItem('my_top_tracks', JSON.stringify(computedStats.topTracks));
 
       // Build mood logs for AI prompt
       const storedMoods = await AsyncStorage.getItem('mood_logs');
-      const moodLogsRaw = storedMoods ? JSON.parse(storedMoods) : {};
+      let moodLogsRaw = {};
+      if (storedMoods) {
+        try { moodLogsRaw = JSON.parse(storedMoods); } catch { await AsyncStorage.removeItem('mood_logs'); }
+      }
       const DAYS_LIST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       let moods = [];
       if (Array.isArray(moodLogsRaw)) moods = moodLogsRaw.filter(Boolean);
@@ -301,7 +359,9 @@ export default function HomeScreen({ navigation }) {
       }
 
       const aiWrap = await groqService.generateWeeklyWrap(computedStats, moods);
-      setStats(computedStats); setWrap(aiWrap);
+      setStats(computedStats);
+      // setRecentTracks handled above by live Spotify fetch
+      setWrap(aiWrap);
       await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ wrap: aiWrap, stats: computedStats, weekKey: currentWeekKey }));
 
       try {
@@ -312,6 +372,14 @@ export default function HomeScreen({ navigation }) {
         }
       } catch {}
 
+      // 3. Proactively fetch previous week for Stats comparison (warm up cache)
+      try {
+        const lastWeekKey = getLastWeekKey();
+        const prevCloud = await apiService.getWrapFromCloud(lastWeekKey);
+        if (prevCloud.found) {
+          await AsyncStorage.setItem('prev_weekly_wrap', JSON.stringify(prevCloud));
+        }
+      } catch {}
     } catch (e) {
       if (e?.response?.status === 401) { signOut(); return; }
       setWrap(GUEST_WRAP); setStats(GUEST_STATS);
@@ -323,7 +391,10 @@ export default function HomeScreen({ navigation }) {
     setRegenLoading(true);
     try {
       const storedMoods = await AsyncStorage.getItem('mood_logs');
-      const moodLogsRaw = storedMoods ? JSON.parse(storedMoods) : {};
+      let moodLogsRaw = {};
+      if (storedMoods) {
+        try { moodLogsRaw = JSON.parse(storedMoods); } catch { /* ignore corrupt mood data */ }
+      }
       const DAYS_LIST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       let moods = [];
       if (Array.isArray(moodLogsRaw)) moods = moodLogsRaw.filter(Boolean);
@@ -338,8 +409,11 @@ export default function HomeScreen({ navigation }) {
       setWrap(updatedWrap);
       const cached = await AsyncStorage.getItem('weekly_wrap');
       if (cached) {
-        const data = JSON.parse(cached);
-        await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...data, wrap: updatedWrap }));
+        let data = null;
+        try { data = JSON.parse(cached); } catch { /* ignore */ }
+        if (data) {
+          await AsyncStorage.setItem('weekly_wrap', JSON.stringify({ ...data, wrap: updatedWrap }));
+        }
       }
     } catch (e) {
       if (e?.response?.status === 429) {
@@ -442,7 +516,15 @@ export default function HomeScreen({ navigation }) {
               <View style={styles.characterCardContent}>
                 <View style={styles.characterCardLeft}>
                   <Text style={styles.characterCardLabel}>THIS WEEK AS</Text>
-                  <Text style={styles.characterCardName}>{wrap.tamil_character.name}</Text>
+                  <Text 
+                    style={[
+                      styles.characterCardName, 
+                      (wrap.tamil_character.name?.length > 15) && { fontSize: 24, lineHeight: 28 }
+                    ]}
+                    numberOfLines={2}
+                  >
+                    {wrap.tamil_character.name?.replace(/_/g, ' ')}
+                  </Text>
                   <Text style={styles.characterCardFilm}>{wrap.tamil_character.film}</Text>
                 </View>
                 {/* No play button — removed per spec */}
@@ -570,6 +652,32 @@ export default function HomeScreen({ navigation }) {
           </View>
         )}
 
+        {/* ── Recently Played ── */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionHeaderText}>Recently played</Text>
+            <TouchableOpacity onPress={onRefresh} style={styles.refreshBadge}>
+              <Text style={styles.refreshBadgeText}>↻ Refresh</Text>
+            </TouchableOpacity>
+          </View>
+          {recentTracks.length > 0 ? (
+            recentTracks.map((track, i) => (
+              <TrackRow 
+                key={`${track.trackId || i}-${i}`} 
+                track={{ 
+                  ...track, 
+                  duration_ms: track.durationMs,
+                  artists: [{ name: track.artist }], 
+                  album: { images: [{ url: track.albumImg }] } 
+                }} 
+                rank={i + 1} 
+              />
+            ))
+          ) : (
+            <Text style={styles.emptyRecentText}>No recent tracks found. Syncing...</Text>
+          )}
+        </View>
+
         <View style={{ height: 120 }} />
       </ScrollView>
 
@@ -646,7 +754,13 @@ function TrackRow({ track, rank }) {
 function ArtistRow({ artist, rank }) {
   const colors = ['#FF3366', '#8B5CF6', '#06B6D4', '#FFD700', '#10B981'];
   const color = colors[rank % colors.length];
-  const imageUrl = artist.images?.[1]?.url || artist.images?.[0]?.url;
+  
+  // Resolve image URL from various possible formats
+  const imageUrl = artist.images?.[1]?.url || 
+                   artist.images?.[0]?.url || 
+                   (typeof artist.images === 'string' ? artist.images : null) ||
+                   artist.image;
+
   return (
     <View style={styles.trackRow}>
       <Text style={styles.trackRank}>{rank}</Text>
@@ -667,7 +781,13 @@ function ArtistRow({ artist, rank }) {
 function ArtistChip({ artist, rank }) {
   const colors = ['#FF3366', '#8B5CF6', '#06B6D4', '#FFD700', '#10B981'];
   const color = colors[rank % colors.length];
-  const imageUrl = artist.images?.[1]?.url || artist.images?.[0]?.url;
+  
+  // Resolve image URL from various possible formats
+  const imageUrl = artist.images?.[1]?.url || 
+                   artist.images?.[0]?.url || 
+                   (typeof artist.images === 'string' ? artist.images : null) ||
+                   artist.image;
+
   return (
     <View style={styles.artistChip}>
       {imageUrl
@@ -786,4 +906,8 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#1A1A28', marginBottom: 4 },
   modalTitle: { fontSize: 17, fontWeight: '800', color: '#F0F0FF', letterSpacing: -0.3 },
   modalClose: { fontSize: 16, color: '#9090B0', fontWeight: '700', paddingHorizontal: 6 },
+  
+  refreshBadge: { backgroundColor: '#FF336615', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#FF336630' },
+  refreshBadgeText: { color: '#FF3366', fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  emptyRecentText: { color: '#5A5A7A', fontSize: 12, textAlign: 'center', marginTop: 10, fontStyle: 'italic' },
 });

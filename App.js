@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import LoginScreen from './src/screens/LoginScreen';
 import UsernameScreen from './src/screens/UsernameScreen';
+import ErrorBoundary from './src/components/ErrorBoundary';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { COLORS } from './src/utils/constants';
 
@@ -31,10 +32,12 @@ export default function App() {
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider style={styles.root}>
-        <AuthProvider>
-          <StatusBar style="light" backgroundColor={COLORS.bg} translucent={false} />
-          <AppContent />
-        </AuthProvider>
+        <ErrorBoundary>
+          <AuthProvider>
+            <StatusBar style="light" backgroundColor={COLORS.bg} translucent={false} />
+            <AppContent />
+          </AuthProvider>
+        </ErrorBoundary>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

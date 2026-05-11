@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Dimensions, Animated, TouchableOpacity, TextInput
+  View, Text, ScrollView, StyleSheet, Dimensions, Animated, TouchableOpacity, TextInput, RefreshControl
 } from 'react-native';
 import Reanimated, { useSharedValue, useAnimatedProps, withTiming, runOnJS } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -146,6 +146,7 @@ export default function StatsScreen() {
   const [prevStats, setPrevStats]       = useState(null);
   const [wrap, setWrap]                 = useState(null);
   const [hasPrevData, setHasPrevData]   = useState(false);
+  const [refreshing, setRefreshing]     = useState(false);
 
   // Live comparison: { currentMinutes, lastMinutes, percentageChange }
   const [comparison, setComparison] = useState(null);
@@ -161,22 +162,39 @@ export default function StatsScreen() {
     return () => clearInterval(pollingRef.current);
   }, []);
 
-  // ── Load local stats first (instant display) ─────────────────────────────
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([loadStats(), loadComparison()]);
+    setRefreshing(false);
+  };
   const loadStats = async () => {
     try {
       // Current week from cache
       const cached = await AsyncStorage.getItem('weekly_wrap');
       if (cached) {
-        const { stats, wrap: w } = JSON.parse(cached);
-        if (stats) { setCurrentStats(stats); setWrap(w); }
+        let data = null;
+        try { data = JSON.parse(cached); } catch (e) {
+          console.error('[StatsScreen] Corrupt weekly_wrap cache, clearing:', e);
+          await AsyncStorage.removeItem('weekly_wrap');
+        }
+        if (data && data.stats) { 
+          setCurrentStats(data.stats); 
+          setWrap(data.wrap); 
+        }
       }
 
       // Previous week: try local cache first
       const prevCached = await AsyncStorage.getItem('prev_weekly_wrap');
       if (prevCached) {
-        const { stats: ps } = JSON.parse(prevCached);
-        if (ps && (ps.explorationIndex || ps.estimatedMinutes)) {
-          setPrevStats(ps);
+        let data = null;
+        try {
+          data = JSON.parse(prevCached);
+        } catch (e) {
+          console.error('Error parsing prev_weekly_wrap:', e);
+        }
+        
+        if (data && data.stats && (data.stats.explorationIndex || data.stats.estimatedMinutes)) {
+          setPrevStats(data.stats);
           setHasPrevData(true);
         }
       }
@@ -189,8 +207,14 @@ export default function StatsScreen() {
           if (cloud?.found && cloud.stats) {
             setPrevStats(cloud.stats);
             setHasPrevData(true);
+            // Cache it so it persists across sessions
+            await AsyncStorage.setItem('prev_weekly_wrap', JSON.stringify(cloud));
+            // Trigger a re-comparison now that we have prev data
+            loadComparison();
           }
-        } catch {}
+        } catch (e) {
+          console.log('[Stats] Cloud fetch for prev week failed:', e.message);
+        }
       }
     } catch {}
 
@@ -214,8 +238,13 @@ export default function StatsScreen() {
     try {
       const cached = await AsyncStorage.getItem('weekly_wrap');
       const prevCached = await AsyncStorage.getItem('prev_weekly_wrap');
-      const currMins = cached ? (JSON.parse(cached).stats?.estimatedMinutes || 0) : 0;
-      const lastMins = prevCached ? (JSON.parse(prevCached).stats?.estimatedMinutes || 0) : 0;
+      
+      let currData = null, prevData = null;
+      try { currData = cached ? JSON.parse(cached) : null; } catch { await AsyncStorage.removeItem('weekly_wrap'); }
+      try { prevData = prevCached ? JSON.parse(prevCached) : null; } catch { await AsyncStorage.removeItem('prev_weekly_wrap'); }
+
+      const currMins = currData?.stats?.estimatedMinutes || 0;
+      const lastMins = prevData?.stats?.estimatedMinutes || 0;
       let percentageChange = 0;
       if (lastMins > 0) {
         percentageChange = Math.round(((currMins - lastMins) / lastMins) * 100);
@@ -248,7 +277,11 @@ export default function StatsScreen() {
 
   return (
     <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        contentContainerStyle={styles.scroll} 
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FF3366" />}
+      >
 
         {/* Header */}
         <View style={styles.header}>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  TextInput, Modal, Dimensions, Image, Animated,
+  TextInput, Modal, Dimensions, Image, Animated, RefreshControl
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -93,7 +93,9 @@ export default function MoodScreen() {
   const loadMoods = async () => {
     try {
       const stored = await AsyncStorage.getItem('mood_logs');
-      if (stored) setMoodLogs(JSON.parse(stored));
+      if (stored) {
+        try { setMoodLogs(JSON.parse(stored)); } catch { await AsyncStorage.removeItem('mood_logs'); }
+      }
     } catch {}
 
     if (!user?._id || user.isGuest) return;
@@ -114,13 +116,18 @@ export default function MoodScreen() {
     const lastFetchRaw = await AsyncStorage.getItem('daily_music_last_fetch');
     const lastFetch = lastFetchRaw ? parseInt(lastFetchRaw) : 0;
     const cached = await AsyncStorage.getItem('daily_music');
-    if (cached) setDailyMusic(JSON.parse(cached));
+    if (cached) {
+      try { setDailyMusic(JSON.parse(cached)); } catch { await AsyncStorage.removeItem('daily_music'); }
+    }
     if (Date.now() - lastFetch < 30 * 60 * 1000 && cached) return;
 
     try {
       const historyRes = await apiService.getListeningHistory(getCurrentWeekKey());
       const existingRaw = await AsyncStorage.getItem('daily_music');
-      const byDay = existingRaw ? { ...JSON.parse(existingRaw) } : {};
+      let byDay = {};
+      if (existingRaw) {
+        try { byDay = { ...JSON.parse(existingRaw) }; } catch { /* ignore corrupt cache */ }
+      }
       
       if (historyRes && historyRes.found && historyRes.dailyTopTracks) {
         Object.entries(historyRes.dailyTopTracks).forEach(([dateStr, tracks]) => {
@@ -133,7 +140,8 @@ export default function MoodScreen() {
           byDay[dayIdx].tracks = tracks.slice(0, 5).map(t => ({
             id: t.trackId,
             name: t.name,
-            artists: [{ name: t.artist }]
+            artists: [{ name: t.artist }],
+            album: { images: [{ url: t.albumImg }] }
           }));
           
           byDay[dayIdx].artists = Array.from(new Set(tracks.map(t => t.artist))).slice(0, 4);
@@ -189,7 +197,21 @@ export default function MoodScreen() {
 
   return (
     <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        contentContainerStyle={styles.scroll} 
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={false}
+            onRefresh={() => {
+              loadMoods();
+              fetchDailyMusic();
+            }}
+            tintColor="#FF3366"
+            colors={["#FF3366"]}
+          />
+        }
+      >
 
         {/* ── Header ── */}
         <View style={styles.header}>

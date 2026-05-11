@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, Image,
   ActivityIndicator, Dimensions, Modal, TextInput, Alert, Share,
-  PanResponder, Animated, Pressable,
+  PanResponder, Animated, Pressable, RefreshControl,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -12,7 +12,7 @@ import { COLORS, FONTS, SPACING } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');
-const FILTER_TABS = ['All', 'Close', 'Listening', 'Requests'];
+const FILTER_TABS = ['All', 'Requests'];
 
 function SwipeDownModal({ visible, onClose, children, sheetStyle }) {
   const translateY = React.useRef(new Animated.Value(0)).current;
@@ -44,31 +44,14 @@ function SwipeDownModal({ visible, onClose, children, sheetStyle }) {
   );
 }
 
-// Lightning bolt match badge
-function MatchBadge({ score, onReveal }) {
-  const [revealed, setRevealed] = useState(false);
-  const anim = React.useRef(new Animated.Value(0)).current;
-
-  const handlePress = () => {
-    if (revealed) return;
-    setRevealed(true);
-    Animated.spring(anim, { toValue: 1, tension: 100, friction: 8, useNativeDriver: true }).start();
-    onReveal?.();
-  };
-
-  const scale = anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 1.3, 1] });
-  const getColor = (s) => s >= 80 ? '#10B981' : s >= 60 ? '#FFD700' : '#FF3366';
-
+// Vibe Match badge
+function MatchBadge({ onReveal }) {
   return (
-    <Pressable onPress={handlePress} style={styles.matchBadge}>
-      <Animated.View style={[styles.matchBadgeInner, revealed && { backgroundColor: getColor(score) + '22', borderColor: getColor(score) + '66' }, { transform: [{ scale }] }]}>
+    <Pressable onPress={onReveal} style={styles.matchBadge}>
+      <View style={[styles.matchBadgeInner, { backgroundColor: '#FF336611', borderColor: '#FF336644' }]}>
         <Text style={styles.matchBolt}>⚡</Text>
-        {revealed ? (
-          <Text style={[styles.matchScore, { color: getColor(score) }]}>{score}%</Text>
-        ) : (
-          <Text style={styles.matchTap}>›</Text>
-        )}
-      </Animated.View>
+        <Text style={[styles.matchScore, { color: '#FF3366', fontSize: 11 }]}>Vibe Match</Text>
+      </View>
     </Pressable>
   );
 }
@@ -114,7 +97,7 @@ export default function FriendsScreen({ route }) {
   useFocusEffect(useCallback(() => { loadFriends(); loadRequests(); }, [user?._id]));
 
   const loadFriends = async () => {
-    try { const raw = await AsyncStorage.getItem('friends_list'); if (raw) setFriends(JSON.parse(raw)); } catch {}
+    try { const raw = await AsyncStorage.getItem('friends_list'); if (raw) { try { setFriends(JSON.parse(raw)); } catch { await AsyncStorage.removeItem('friends_list'); } } } catch {}
     if (!user?._id) return;
     setLoadingFriends(true);
     try {
@@ -127,7 +110,7 @@ export default function FriendsScreen({ route }) {
   };
 
   const loadRequests = async () => {
-    try { const raw = await AsyncStorage.getItem('friend_requests'); if (raw) setRequests(JSON.parse(raw)); } catch {}
+    try { const raw = await AsyncStorage.getItem('friend_requests'); if (raw) { try { setRequests(JSON.parse(raw)); } catch { await AsyncStorage.removeItem('friend_requests'); } } } catch {}
     if (!user?._id) return;
     try {
       const res = await apiService.getPendingRequests(user._id);
@@ -255,7 +238,21 @@ export default function FriendsScreen({ route }) {
         ))}
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+      <ScrollView 
+        showsVerticalScrollIndicator={false} 
+        contentContainerStyle={styles.scroll}
+        refreshControl={
+          <RefreshControl
+            refreshing={loadingFriends}
+            onRefresh={() => {
+              loadFriends();
+              loadRequests();
+            }}
+            tintColor={COLORS.accent}
+            colors={[COLORS.accent]}
+          />
+        }
+      >
 
         {/* Compatibility card */}
         {selectedFriend && (
@@ -291,7 +288,7 @@ export default function FriendsScreen({ route }) {
         )}
 
         {/* Friend List */}
-        {(activeFilter === 'All' || activeFilter === 'Close' || activeFilter === 'Listening') && (
+        {activeFilter === 'All' && (
           filteredFriends.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={styles.emptyEmoji}>🎧</Text>
@@ -332,7 +329,7 @@ export default function FriendsScreen({ route }) {
                     <Text style={styles.friendListening}>As {friend.wrap.tamil_character.name} · {friend.wrap.tamil_character.film}</Text>
                   )}
                 </View>
-                <MatchBadge score={75} onReveal={() => checkCompatibility(friend)} />
+                <MatchBadge onReveal={() => checkCompatibility(friend)} />
               </TouchableOpacity>
             ))
           )
@@ -344,9 +341,6 @@ export default function FriendsScreen({ route }) {
             <View style={styles.emptyState}>
               <Text style={styles.emptyEmoji}>📭</Text>
               <Text style={styles.emptyText}>No pending requests</Text>
-              <TouchableOpacity style={styles.shareBtn} onPress={shareInviteLink}>
-                <Text style={styles.shareBtnText}>📤 Share My Invite Link</Text>
-              </TouchableOpacity>
             </View>
           ) : (
             requests.map(req => (

@@ -131,9 +131,18 @@ export function AuthProvider({ children }) {
       ]);
 
       if (storedToken && storedUser) {
-        let parsedUser = JSON.parse(storedUser);
+        let parsedUser = null;
+        try {
+          parsedUser = JSON.parse(storedUser);
+        } catch (e) {
+          console.error('Error parsing stored user data:', e);
+          setLoading(false);
+          return;
+        }
+
+        if (!parsedUser) { setLoading(false); return; }
         // Clean up any broken SVG data URIs from previous versions
-        if (parsedUser.profileImage && parsedUser.profileImage.startsWith('data:image/svg')) {
+        if (parsedUser.profileImage && typeof parsedUser.profileImage === 'string' && parsedUser.profileImage.startsWith('data:image/svg')) {
           parsedUser.profileImage = null;
         }
         
@@ -227,7 +236,7 @@ export function AuthProvider({ children }) {
 
   const doSignOut = async () => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-    await AsyncStorage.multiRemove(['guest_mode', 'weekly_wrap', 'friends_list', 'friend_requests']);
+    await AsyncStorage.multiRemove(['guest_mode', 'weekly_wrap', 'prev_weekly_wrap', 'friends_list', 'friend_requests', 'mood_logs', 'notifications_last_gen_date']);
     try {
       await Promise.all([
         SecureStore.deleteItemAsync('spotify_token'),

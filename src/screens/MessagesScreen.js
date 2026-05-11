@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Image, KeyboardAvoidingView, Platform, Modal,
-  ActivityIndicator, Linking, Alert, PanResponder, Animated,
+  ActivityIndicator, Linking, Alert, PanResponder, Animated, RefreshControl
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +10,7 @@ import { apiService } from '../services/apiService';
 import { COLORS, FONTS, SPACING } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getRuntimeConfig } from '../utils/runtimeConfig';
+import { spotifyService } from '../services/spotifyService';
 
 const { BACKEND_URL } = getRuntimeConfig();
 const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
@@ -78,7 +79,7 @@ function SwipeDownModal({ visible, onClose, children, sheetStyle }) {
 }
 
 export default function MessagesScreen() {
-  const { user, jwtToken } = useAuth();
+  const { user, jwtToken, spotifyToken } = useAuth();
   const [friends, setFriends] = useState([]);
   const [messages, setMessages] = useState({});
   const [openChat, setOpenChat] = useState(null);
@@ -140,7 +141,7 @@ export default function MessagesScreen() {
 
   const loadFriends = async () => {
     if (!user?._id) { setLoadingFriends(false); return; }
-    try { const c = await AsyncStorage.getItem('friends_list'); if (c) setFriends(JSON.parse(c)); } catch {}
+    try { const c = await AsyncStorage.getItem('friends_list'); if (c) { try { setFriends(JSON.parse(c)); } catch { await AsyncStorage.removeItem('friends_list'); } } } catch {}
     try {
       const res = await apiService.getFriends(user._id);
       const list = res.friends || [];
@@ -151,7 +152,30 @@ export default function MessagesScreen() {
   };
 
   const loadTopTracks = async () => {
-    try { const t = await AsyncStorage.getItem('my_top_tracks'); if (t) setTopTracks(JSON.parse(t)); } catch {}
+    try {
+      if (!spotifyToken) return;
+      const items = await spotifyService.getRecentlyPlayed(spotifyToken, 20);
+      if (items && items.length > 0) {
+        // Map and deduplicate recently played items to track format
+        const tracks = [];
+        const seenIds = new Set();
+        for (const item of items) {
+          if (!seenIds.has(item.track.id)) {
+            seenIds.add(item.track.id);
+            tracks.push(item.track);
+          }
+        }
+        setTopTracks(tracks);
+        await AsyncStorage.setItem('my_top_tracks', JSON.stringify(tracks));
+      } else {
+        const cached = await AsyncStorage.getItem('my_top_tracks');
+        if (cached) {
+          try { setTopTracks(JSON.parse(cached)); } catch { await AsyncStorage.removeItem('my_top_tracks'); }
+        }
+      }
+    } catch (e) {
+      console.log('[Messages] loadRecentTracks failed:', e.message);
+    }
   };
 
   const loadChatHistory = async (friend) => {
@@ -180,10 +204,17 @@ export default function MessagesScreen() {
   };
 
   const shareTrack = (track) => {
-    sendMessage(`🎵 ${track.name} — ${track.artists?.[0]?.name}`, 'track', {
-      name: track.name, artist: track.artists?.[0]?.name,
-      imageUrl: track.album?.images?.[1]?.url || track.album?.images?.[0]?.url,
-      spotifyUrl: track.external_urls?.spotify, spotifyUri: track.uri,
+    const artistName = track.artists?.[0]?.name || track.artist || 'Unknown Artist';
+    const imageUrl = track.album?.images?.[1]?.url || track.album?.images?.[0]?.url || track.albumImg;
+    const spotifyUrl = track.external_urls?.spotify || track.spotifyUrl;
+    const uri = track.uri;
+
+    sendMessage(`🎵 ${track.name} — ${artistName}`, 'track', {
+      name: track.name,
+      artist: artistName,
+      imageUrl,
+      spotifyUrl,
+      spotifyUri: uri,
     });
     setShowPicker(false);
   };
@@ -241,7 +272,7 @@ export default function MessagesScreen() {
       <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
         <KeyboardAvoidingView
           style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
         >
           <View style={styles.chatHeader}>
@@ -436,18 +467,25 @@ export default function MessagesScreen() {
               <Text style={styles.pickerTitle}>Share a Track</Text>
               <ScrollView style={{ maxHeight: 380 }}>
                 {topTracks.length === 0 ? (
-                  <Text style={styles.noResults}>Visit Home tab first to load tracks.</Text>
+                  <View style={styles.noResultsContainer}>
+                    <Text style={styles.noResults}>No songs found this week yet.</Text>
+                    <TouchableOpacity style={styles.syncBtnSmall} onPress={loadTopTracks}>
+                      <Text style={styles.syncBtnSmallText}>↻ Sync from Cloud</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.noResultsSub}>Keep listening or visit the Home tab to sync.</Text>
+                  </View>
                 ) : topTracks.slice(0, 10).map((track, i) => {
-                  const img = track.album?.images?.[1]?.url || track.album?.images?.[0]?.url;
+                  const artistName = track.artists?.[0]?.name || track.artist;
+                  const img = track.album?.images?.[1]?.url || track.album?.images?.[0]?.url || track.albumImg;
                   return (
-                    <TouchableOpacity key={track.id || i} style={styles.pickerRow} onPress={() => shareTrack(track)}>
+                    <TouchableOpacity key={`${track.id || track.trackId || i}-${i}`} style={styles.pickerRow} onPress={() => shareTrack(track)}>
                       {img
                         ? <Image source={{ uri: img }} style={styles.pickerImg} />
                         : <View style={[styles.pickerImg, { backgroundColor: COLORS.surface, alignItems: 'center', justifyContent: 'center' }]}><Text>🎵</Text></View>
                       }
                       <View style={{ flex: 1 }}>
                         <Text style={styles.pickerTrackName} numberOfLines={1}>{track.name}</Text>
-                        <Text style={styles.pickerArtist} numberOfLines={1}>{track.artists?.[0]?.name}</Text>
+                        <Text style={styles.pickerArtist} numberOfLines={1}>{artistName}</Text>
                       </View>
                       <Text style={{ color: COLORS.accent, fontSize: 22 }}>›</Text>
                     </TouchableOpacity>
@@ -482,7 +520,20 @@ export default function MessagesScreen() {
           <Text style={styles.emptyHint}>Add friends to start messaging.</Text>
         </View>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={loadingFriends}
+              onRefresh={() => {
+                loadFriends();
+                loadTopTracks();
+              }}
+              tintColor={COLORS.accent}
+              colors={[COLORS.accent]}
+            />
+          }
+        >
           {/* ── NOTES SECTION ────────────────────────────────────────────────── */}
           {friends.some(f => f.lastPlayedTrack) && (
             <View style={styles.notesContainer}>
@@ -491,24 +542,15 @@ export default function MessagesScreen() {
                   const track = friend.lastPlayedTrack;
                   return (
                     <TouchableOpacity key={friend._id} style={styles.noteItem} onPress={() => openChatWith(friend)} activeOpacity={0.8}>
-                      <View style={styles.noteAvatarWrap}>
-                        {friend.profileImage ? (
-                          <Image source={{ uri: friend.profileImage }} style={styles.noteAvatar} />
+                      <View style={styles.noteBubble}>
+                        {track.albumImg ? (
+                          <Image source={{ uri: track.albumImg }} style={styles.noteBubbleImg} />
                         ) : (
-                          <View style={[styles.noteAvatar, styles.convoAvatarFallback]}>
-                            <Text style={styles.convoAvatarText}>{friend.displayName?.[0]}</Text>
-                          </View>
+                          <Text style={styles.noteBubbleIcon}>🎵</Text>
                         )}
-                        <View style={styles.noteBubble}>
-                          {track.albumImg ? (
-                            <Image source={{ uri: track.albumImg }} style={styles.noteBubbleImg} />
-                          ) : (
-                            <Text style={styles.noteBubbleIcon}>🎵</Text>
-                          )}
-                          <View style={styles.noteBubbleTextWrap}>
-                            <Text style={styles.noteBubbleTrack} numberOfLines={1}>{track.name}</Text>
-                            <Text style={styles.noteBubbleArtist} numberOfLines={1}>{track.artist}</Text>
-                          </View>
+                        <View style={styles.noteBubbleTextWrap}>
+                          <Text style={styles.noteBubbleTrack} numberOfLines={1}>{track.name}</Text>
+                          <Text style={styles.noteBubbleArtist} numberOfLines={1}>{track.artist}</Text>
                         </View>
                       </View>
                       <Text style={styles.noteName} numberOfLines={1}>{friend.displayName}</Text>
@@ -563,12 +605,10 @@ const styles = StyleSheet.create({
   wsIndicatorOn: { backgroundColor: '#22c55e' },
 
   notesContainer: { paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.border },
-  notesScroll: { paddingHorizontal: SPACING.md, gap: 16 },
-  noteItem: { alignItems: 'center', width: 68 },
-  noteAvatarWrap: { position: 'relative', marginBottom: 6 },
-  noteAvatar: { width: 64, height: 64, borderRadius: 32 },
-  noteBubble: { position: 'absolute', top: -8, left: 32, backgroundColor: COLORS.bgElevated, borderRadius: 18, padding: 5, paddingRight: 10, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border, maxWidth: 130, zIndex: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
-  noteBubbleImg: { width: 22, height: 22, borderRadius: 11, marginRight: 6 },
+  notesScroll: { paddingHorizontal: SPACING.md, gap: 12 },
+  noteItem: { alignItems: 'center' },
+  noteBubble: { backgroundColor: COLORS.bgElevated, borderRadius: 20, padding: 6, paddingRight: 14, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border, maxWidth: 140, marginBottom: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
+  noteBubbleImg: { width: 32, height: 32, borderRadius: 16, marginRight: 8 },
   noteBubbleIcon: { fontSize: 14, marginRight: 4 },
   noteBubbleTextWrap: { flexShrink: 1 },
   noteBubbleTrack: { fontSize: 11, fontWeight: '700', color: COLORS.text, flexShrink: 1 },
@@ -680,5 +720,9 @@ const styles = StyleSheet.create({
   pickerImg: { width: 46, height: 46, borderRadius: 8 },
   pickerTrackName: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 2 },
   pickerArtist: { fontSize: 12, color: COLORS.textMuted },
-  noResults: { color: COLORS.textMuted, fontSize: 14, textAlign: 'center', paddingVertical: 30 },
+  noResultsContainer: { paddingVertical: 40, alignItems: 'center' },
+  noResults: { color: COLORS.text, fontSize: 15, fontWeight: '700', marginBottom: 4 },
+  noResultsSub: { color: COLORS.textMuted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 },
+  syncBtnSmall: { backgroundColor: COLORS.accent, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginVertical: 12 },
+  syncBtnSmallText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 });

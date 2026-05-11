@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
+  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../context/AuthContext';
@@ -30,7 +30,7 @@ export default function LoginScreen() {
 
       <View style={styles.content}>
         <View style={styles.logoSection}>
-          <Text style={styles.logoEmoji}>🎵</Text>
+          <Image source={require('../../assets/icon.png')} style={styles.logoImage} />
           <Text style={styles.logoText}>BeatWrap<Text style={styles.logoBang}>!</Text></Text>
           <Text style={styles.tagline}>Your week in music. Reimagined.</Text>
         </View>
@@ -62,17 +62,7 @@ export default function LoginScreen() {
             }
           </TouchableOpacity>
 
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.dividerLine} />
-          </View>
 
-          {/* enterGuestMode sets user in AuthContext → App.js auto-routes to AppNavigator */}
-          <TouchableOpacity style={styles.guestBtn} onPress={enterGuestMode} activeOpacity={0.8}>
-            <Text style={styles.guestBtnText}>👀  Enter as Guest</Text>
-          </TouchableOpacity>
-          <Text style={styles.guestHint}>Demo mode — no Spotify needed</Text>
         </View>
 
         <Text style={styles.legal}>
@@ -89,7 +79,7 @@ const styles = StyleSheet.create({
   blob2: { position: 'absolute', width: 300, height: 300, borderRadius: 150, backgroundColor: COLORS.violet + '10', bottom: -50, right: -80 },
   content: { flex: 1, paddingHorizontal: SPACING.lg, justifyContent: 'center', gap: SPACING.xl },
   logoSection: { alignItems: 'center', gap: 8 },
-  logoEmoji: { fontSize: 56, marginBottom: 4 },
+  logoImage: { width: 100, height: 100, marginBottom: 12 },
   logoText: { fontWeight: FONTS.weights.black, fontSize: 52, color: COLORS.text, letterSpacing: -2 },
   logoBang: { color: COLORS.accent },
   tagline: { fontSize: FONTS.sizes.sm, color: COLORS.textMuted, textAlign: 'center' },
